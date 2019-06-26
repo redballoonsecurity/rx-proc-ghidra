@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- See Relax specification: Ghidra/Framework/SoftwareModeling/data/languages/language_definitions.rxg -->
+
+<language_definitions>
+   <language processor="RX62T"
+            endian="little"
+            size="32"
+            variant="default"
+            version="1.0"
+            slafile="rx62t.sla"
+            processorspec="rx62t.pspec"
+            id="rx62t:LE:32:default">
+    <description>RX62T/RXv2 Language Module</description>
+    <compiler name="default" spec="rx62t.cspec" id="default"/>
+  </language>
+</language_definitions>

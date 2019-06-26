@@ -1,0 +1,2486 @@
+# sleigh include file for RXv2 language instructions
+
+define token opbyte (8)
+   op0_8     = (0,7)
+   op6_2     = (6,7)
+   op5_3     = (5,7)
+   op4_4     = (4,7)
+   op4_3     = (4,6)
+   op4_1     = (4,4)
+   op3_5     = (3,7)
+   op3_3     = (3,5)
+   op3_1     = (3,3)
+   op2_6     = (2,7)
+   op2_4     = (2,5)
+   op2_3     = (2,4)
+   op2_2     = (2,3)
+   op1_7     = (1,7)
+   op1_1     = (1,1)
+   op0_7     = (0,6)
+   op0_5     = (0,4)
+   op0_4     = (0,3)
+   op0_3     = (0,2)
+   op0_2     = (0,1)
+   op0_1     = (0,0)
+
+   bits4_4   = (4,7)
+   bits0_4   = (0,3)
+
+   reg0_4    = (0,3)
+   reg0_3    = (0,2)
+
+   reg4_4    = (4,7)
+   reg4_3    = (4,6)
+
+   rd0_4     = (0,3)
+   rs1_4_4   = (4,7)
+   rs1_0_4   = (0,3)
+   rs2_4_4   = (4,7)
+   rs2_0_4   = (0,3)
+
+   rs0_3     = (0,2)
+   rs4_3     = (4,6)
+   rd0_3     = (0,2)
+   rd4_3     = (4,6)
+
+   cr4_4     = (4,7)
+   cr0_4     = (0,3)
+
+   adest7_1  = (7,7)
+
+   mi6_2     = (6,7)
+   li2_2     = (2,3)
+   li0_2     = (0,1)
+   ld2_2     = (2,3)
+   ld0_2     = (0,1)
+   ad2_2     = (2,3)
+
+   uimm4_4   = (4,7)
+   uimm0_5   = (0,4)
+   uimm0_4   = (0,3)
+
+   dsp7_1 = (7,7)
+   dsp3_1 = (3,3)
+   dsp0_4 = (0,3)
+   dsp0_3 = (0,2)
+
+   cd4_4      = (4,7)
+   cd0_4      = (0,3)
+
+   cb0_4      = (0,3)
+
+   sz6_2      = (6,7)
+   sz4_2      = (4,5)
+   sz4_1      = (4,4)
+   sz3_1      = (3,3)
+   sz2_2      = (2,3)
+   sz2_1      = (2,2)
+   sz0_2      = (0,1)
+   sz0_1      = (0,0)
+;
+
+define context contextreg
+   mode_ld2 = (9,10) noflow # when there's ld src and ld dest
+   mode_mi =  (6,8) noflow  # extra bit for UB, which has no encoding
+   mode_sz =  (13,15) noflow # extra bit for UB
+   mode_li =  (2,3) noflow
+   mode_ld =  (0,1) noflow
+
+   cc_val   = (16,19) noflow
+   pass_dsp = (24,31) noflow
+;
+
+define token data8 (8)
+   imm0_3   = (0,2)
+   imm4     = (0,3)
+   imm8		= (0,7)
+   sign8	= (7,7)
+   simm8    = (0,7) signed
+;
+
+define token data16 (16)
+   timm4        = (12,15)
+   imm16        = (0,15)
+   sign16	= (15,15)
+   simm16	= (0,15) signed
+;
+
+define token data24 (24)
+   imm24        = (0,23)
+   simm24       = (0,23) signed
+;
+
+define token data32 (32)
+   imm32        = (0,31)
+   simm32       = (0,31) signed
+;
+
+
+attach variables [ reg0_4 reg4_4 rd0_4 rs1_0_4 rs1_4_4 rs2_0_4 rs2_4_4 ] [ SP R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 ];
+attach variables [ rs0_3 rs4_3 rd0_3 rd4_3 ] [ SP R1 R2 R3 R4 R5 R6 R7 ];
+
+attach variables [ cr0_4 cr4_4 ] [ PSW PC USP FPSW _ _ _ _ BPSW BPC ISP FINTV INTB EXTB _ _ ];
+
+attach variables [ adest7_1 ] [ ACC _ ];
+
+################################################################
+# Macros
+################################################################
+
+macro setAbsOverflowFlag(source) {
+    $(O_flag) = (source == 0x80000000);
+}
+
+macro setResultFlags(result) {
+	$(Z_flag) = (result == 0);
+	$(S_flag) = (result s< 0);
+}
+
+macro setAddCarryFlags(op1,op2) {
+	$(C_flag) = (carry(op1,zext($(C_flag))) || carry(op2,op1 + zext($(C_flag))));
+}
+
+macro setAddFlags(op1,op2) {
+	$(C_flag) = carry(op1,op2);
+}
+
+macro setSubtractCarryFlags(op1,op2) {
+	notC = ~$(C_flag);
+	$(C_flag) = ((op1 < sext(notC)) || (op2 < (op1 - sext(notC))));
+}
+
+macro setSubtractFlags(op1,op2) {
+    # C: set if an unsigned operation produces no overflow, otherwise cleared
+	$(C_flag) = (op1 >= op2);
+}
+
+macro setAddOverflowFlags(op1,op2) {
+	$(O_flag) = scarry(op1,op2);
+}
+
+macro setSubtractOverflowFlags(op1,op2) {
+    # O: set if a signed operation produces an overflow
+	$(O_flag) = sborrow(op1,op2);
+}
+
+macro setFloatResultFlags(result) {
+    $(Z_flag) = (result f== 0);
+    $(S_flag) = (result f< 0);
+}
+
+macro push32(val32) {
+	SP = SP - 4;
+	*:4 SP = val32;
+}
+
+macro pop32(ret32) {
+	ret32 = *:4 SP;
+	SP = SP + 4;
+}
+
+################################################################
+#cbflag: "C" is cb0_4 = 0x0 unimpl # { export &:1 ($(C_flag)); }
+#cbflag: "Z" is cb0_4 = 0x1 unimpl # { export $(Z_flag); }
+#cbflag: "S" is cb0_4 = 0x2 unimpl # { export $(S_flag); }
+#cbflag: "O" is cb0_4 = 0x3 unimpl # { export $(O_flag); }
+#cbflag: "I" is cb0_4 = 0x8 unimpl # { export $(I_flag); }
+#cbflag: "U" is cb0_4 = 0x9 unimpl # { export $(U_flag); }
+
+## Conditional expressions
+cc: "EQ"              is cc_val = 0      { c:1 = $(Z_flag); export c; }
+cc: "NE"              is cc_val = 1      { c:1 = ($(Z_flag) == 0); export c; }
+cc: "GEU"             is cc_val = 2      { c:1 = $(C_flag); export c; }
+cc: "LTU"             is cc_val = 3      { c:1 = ($(C_flag) == 0); export c; }
+cc: "GTU"             is cc_val = 4      { c:1 = $(C_flag) && ($(Z_flag) == 0); export c; }
+cc: "LEU"             is cc_val = 5      { c:1 = (($(C_flag) && ($(Z_flag) == 0)) == 0); export c; }
+cc: "PZ"              is cc_val = 6      { c:1 = ($(S_flag) == 0); export c; }
+cc: "N"               is cc_val = 7      { c:1 = $(S_flag); export c; }
+cc: "GE"              is cc_val = 8      { c:1 = (($(S_flag) ^^ $(O_flag)) == 0); export c; }
+cc: "LT"              is cc_val = 9      { c:1 = ($(S_flag) ^^ $(O_flag)); export c; }
+cc: "GT"              is cc_val = 10     { c:1 = ((($(S_flag) ^^ $(O_flag)) || $(Z_flag)) == 0); export c; }
+cc: "LE"              is cc_val = 11     { c:1 = ($(S_flag) ^^ $(O_flag)) || $(Z_flag); export c; }
+cc: "O"               is cc_val = 12     { c:1 = $(O_flag); export c; }
+cc: "NO"              is cc_val = 13     { c:1 = ($(O_flag) == 0); export c; }
+cc: "RA"              is cc_val = 14     { c:1 = 1; export c; }  # BRA.B
+cc: "Res"             is cc_val = 15     unimpl # "Reserved"
+
+### For simple conditional execution of an instruction
+COND: cc is cc { if (!cc) goto inst_next; }
+
+# The following tables are for instructions with variable size immediates, source locations, destinations, etc.
+# li: length of immediate
+# ld: length of displacement
+# mi: memory extension size infix
+# ad: addressing
+# See full list of abbreviations on p. 209.
+
+## Variable size signed immediate operands.
+liop: "#"^simm8          is mode_li = 0b01 & simm8  { local tmp:4 = sext(simm8:1); export tmp; }
+liop: "#"^simm16         is mode_li = 0b10 & simm16 { local tmp:4 = sext(simm16:2); export tmp; }
+liop: "#"^simm24         is mode_li = 0b11 & simm24 { local tmp:4 = sext(simm24:3); export tmp; }
+liop: "#"^imm32          is mode_li = 0b00 & imm32  { local tmp:4 = imm32; export tmp; }
+
+## Operands for sized MOV instructions with optional displacement
+szdsc:  ".B"  is mode_sz = 0x0 {}
+szdsc:  ".W"  is mode_sz = 0x1 {}
+szdsc:  ".L"  is mode_sz = 0x2 {}
+szdsc:  ".UW" is mode_sz = 0x3 {}
+szdsc:  ".UB" is mode_sz = 0x4 {}
+
+## Sized source registers
+szrs:   rs0_3  is mode_sz = 0 & rs0_3   { local tmp:4 = sext(rs0_3:1); export tmp; }
+szrs:   rs0_3  is mode_sz = 1 & rs0_3   { local tmp:4 = sext(rs0_3:2); export tmp; }
+szrs:   rs0_3  is mode_sz = 2 & rs0_3   { local tmp:4 = rs0_3; export tmp; }
+
+szrs2:  reg0_4 is mode_sz = 0 & reg0_4  { local tmp:4 = sext(reg0_4:1); export tmp; }
+szrs2:  reg0_4 is mode_sz = 1 & reg0_4  { local tmp:4 = sext(reg0_4:2); export tmp; }
+szrs2:  reg0_4 is mode_sz = 2 & reg0_4  { local tmp:4 = reg0_4; export tmp; }
+
+szrs3:  reg4_4 is mode_sz = 0 & reg4_4  { local tmp:4 = sext(reg4_4:1); export tmp; } # .B
+szrs3:  reg4_4 is mode_sz = 1 & reg4_4  { local tmp:4 = sext(reg4_4:2); export tmp; } # .W
+szrs3:  reg4_4 is mode_sz = 2 & reg4_4  { local tmp:4 = reg4_4; export tmp; }         # .L
+szrs3:  reg4_4 is mode_sz = 3 & reg4_4  { local tmp:4 = zext(reg4_4:2); export tmp; } # .UW
+szrs3:  reg4_4 is mode_sz = 4 & reg4_4  { local tmp:4 = zext(reg4_4:1); export tmp; } # .UB
+
+szrs3u: reg4_4 is mode_sz = 0 & reg4_4  { local tmp:4 = zext(reg4_4:1); export tmp; } # .B (unsigned)
+szrs3u: reg4_4 is mode_sz = 1 & reg4_4  { local tmp:4 = zext(reg4_4:2); export tmp; } # .W (unsigned)
+szrs3u: reg4_4 is mode_sz = 2 & reg4_4  { local tmp:4 = reg4_4; export tmp; }         # .L (unsigned)
+
+## Scale displacement value based on data size (.B = 1, .W = 2, .L = 4)
+### NOTE: Multiplying .B displacement by 1 because just "dsp = imm8;" fails to compile
+szlddsp: ""  is mode_ld = 0x0                                               { local tmp:4 = 0;   export tmp; }  # no displacement
+szlddsp: dsp is mode_ld = 0x1 & mode_sz = 0x0 & imm8  [ dsp = imm8  * 1; ]  { local tmp:4 = dsp; export tmp; }  # .B  dsp:8[Reg]
+szlddsp: dsp is mode_ld = 0x2 & mode_sz = 0x0 & imm16 [ dsp = imm16 * 1; ]  { local tmp:4 = dsp; export tmp; }  # .B dsp:16[Reg]
+szlddsp: dsp is mode_ld = 0x1 & mode_sz = 0x1 & imm8  [ dsp = imm8  * 2; ]  { local tmp:4 = dsp; export tmp; }  # .W  dsp:8[Reg]
+szlddsp: dsp is mode_ld = 0x2 & mode_sz = 0x1 & imm16 [ dsp = imm16 * 2; ]  { local tmp:4 = dsp; export tmp; }  # .W dsp:16[Reg]
+szlddsp: dsp is mode_ld = 0x1 & mode_sz = 0x2 & imm8  [ dsp = imm8  * 4; ]  { local tmp:4 = dsp; export tmp; }  # .L  dsp:8[Reg]
+szlddsp: dsp is mode_ld = 0x2 & mode_sz = 0x2 & imm16 [ dsp = imm16 * 4; ]  { local tmp:4 = dsp; export tmp; }  # .L dsp:16[Reg]
+szlddsp: dsp is mode_ld = 0x1 & mode_sz = 0x3 & imm8  [ dsp = imm8  * 2; ]  { local tmp:4 = dsp; export tmp; }  # .UW  dsp:8[Reg]
+szlddsp: dsp is mode_ld = 0x2 & mode_sz = 0x3 & imm16 [ dsp = imm16 * 2; ]  { local tmp:4 = dsp; export tmp; }  # .UW dsp:16[Reg]
+szlddsp: dsp is mode_ld = 0x1 & mode_sz = 0x4 & imm8  [ dsp = imm8  * 1; ]  { local tmp:4 = dsp; export tmp; }  # .UB  dsp:8[Reg]
+szlddsp: dsp is mode_ld = 0x2 & mode_sz = 0x4 & imm16 [ dsp = imm16 * 1; ]  { local tmp:4 = dsp; export tmp; }  # .UB dsp:16[Reg]
+
+## Destination register with optional displacement
+szld_dst: reg4_4                is mode_ld = 0x3 & reg4_4          { local tmp = reg4_4; export tmp; }  # Rd
+szld_dst: szlddsp^[reg4_4]      is mode_ld < 0x3 & reg4_4; szlddsp { build szlddsp; local tmp = reg4_4 + szlddsp; export tmp; }  # dsp[Rd]
+
+## Source register with optional displacement
+szld_src: szrs3                 is mode_ld = 0x3 & szrs3                             { local tmp:4 = szrs3; export tmp; }  # Rs
+szld_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x0 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = sext(*:1 (reg4_4 + szlddsp)); export tmp; }  # .B
+szld_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x1 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = sext(*:2 (reg4_4 + szlddsp)); export tmp; }  # .W
+szld_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x2 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = *:4 (reg4_4 + szlddsp); export tmp; }  # .L
+szld_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x3 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = zext(*:2 (reg4_4 + szlddsp)); export tmp; } # .UW (actually for mi in MUL variant #4)
+szld_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x4 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = zext(*:1 (reg4_4 + szlddsp)); export tmp; } # .UB (actually for mi in MUL variant #4)
+
+## Source register with optional displacement, unsigned value
+szldu_src: szrs3u                is mode_ld = 0x3 & szrs3u                            { local tmp:4 = szrs3u; export tmp; }  # Rs
+szldu_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x0 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = zext(*:1 (reg4_4 + szlddsp)); export tmp; }  # .B
+szldu_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x1 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = zext(*:2 (reg4_4 + szlddsp)); export tmp; }  # .W
+szldu_src: szlddsp^[reg4_4]      is mode_ld < 0x3 & mode_sz = 0x2 & reg4_4; szlddsp   { build szlddsp; local tmp:4 = *:4 (reg4_4 + szlddsp); export tmp; }  # .L
+
+
+### Variant of LD tables for when there's LD source and destination with independent LD modes
+szlddsp2: ""  is mode_ld2 = 0x0                                               { local tmp:4 = 0; export tmp; }  # no displacement
+szlddsp2: dsp is mode_ld2 = 0x1 & mode_sz = 0x0 & imm8  [ dsp = imm8  * 1; ]  { local tmp:4 = dsp; export tmp; }  # .B  dsp:8[Reg]
+szlddsp2: dsp is mode_ld2 = 0x2 & mode_sz = 0x0 & imm16 [ dsp = imm16 * 1; ]  { local tmp:4 = dsp; export tmp; }  # .B dsp:16[Reg]
+szlddsp2: dsp is mode_ld2 = 0x1 & mode_sz = 0x1 & imm8  [ dsp = imm8  * 2; ]  { local tmp:4 = dsp; export tmp; }  # .W  dsp:8[Reg]
+szlddsp2: dsp is mode_ld2 = 0x2 & mode_sz = 0x1 & imm16 [ dsp = imm16 * 2; ]  { local tmp:4 = dsp; export tmp; }  # .W dsp:16[Reg]
+szlddsp2: dsp is mode_ld2 = 0x1 & mode_sz = 0x2 & imm8  [ dsp = imm8  * 4; ]  { local tmp:4 = dsp; export tmp; }  # .L  dsp:8[Reg]
+szlddsp2: dsp is mode_ld2 = 0x2 & mode_sz = 0x2 & imm16 [ dsp = imm16 * 4; ]  { local tmp:4 = dsp; export tmp; }  # .L dsp:16[Reg]
+
+szld2_dst: reg0_4                is mode_ld2 = 0x3 & reg0_4                    { local tmp = reg0_4; export tmp; }  # Rd
+szld2_dst: szlddsp2^[reg0_4]     is mode_ld2 < 0x3 & reg0_4; szlddsp; szlddsp2 { local tmp = reg0_4 + szlddsp2; export tmp; }  # dsp[Rd]
+
+
+# With complex displacement value (bits split up across different bytes, such as with MOV variants 1, 2, and 4)
+szrsdsp: dsp^[rs4_3] is mode_sz = 0 & rs4_3 [ dsp = 1 * pass_dsp; ] { local tmp:4 = sext(*:1 (rs4_3 + dsp:4)); export tmp; }
+szrsdsp: dsp^[rs4_3] is mode_sz = 1 & rs4_3 [ dsp = 2 * pass_dsp; ] { local tmp:4 = sext(*:2 (rs4_3 + dsp:4)); export tmp; }
+szrsdsp: dsp^[rs4_3] is mode_sz = 2 & rs4_3 [ dsp = 4 * pass_dsp; ] { local tmp:4 = *:4 (rs4_3 + dsp:4); export tmp; }
+
+szrsdspu: dsp^[rs4_3] is mode_sz = 0 & rs4_3 [ dsp = 1 * pass_dsp; ] { local tmpa:4 = rs4_3 + dsp; local tmpb:4 = zext(*:1 tmpa); export tmpb; }
+szrsdspu: dsp^[rs4_3] is mode_sz = 1 & rs4_3 [ dsp = 2 * pass_dsp; ] { local tmpa:4 = rs4_3 + dsp; local tmpb:4 = zext(*:2 tmpa); export tmpb; }
+szrsdspu: dsp^[rs4_3] is mode_sz = 2 & rs4_3 [ dsp = 4 * pass_dsp; ] { local tmpa:4 = rs4_3 + dsp; local tmpb:4 = *:4 tmpa; export tmpb; }
+
+szrddsp: dsp^[rd4_3] is mode_sz = 0 & rd4_3 [ dsp = 1 * pass_dsp; ] { local tmp = (rd4_3 + dsp:4); export tmp; }
+szrddsp: dsp^[rd4_3] is mode_sz = 1 & rd4_3 [ dsp = 2 * pass_dsp; ] { local tmp = (rd4_3 + dsp:4); export tmp; }
+szrddsp: dsp^[rd4_3] is mode_sz = 2 & rd4_3 [ dsp = 4 * pass_dsp; ] { local tmp = (rd4_3 + dsp:4); export tmp; }
+
+## [Ri, Rb] = Rb + (Ri * size_mod), size mods .B = 1, .W = 2, .L = 4
+szRiRb_src: [reg0_4, reg4_4]    is sz4_2 = 0x0 & reg0_4; reg4_4 { local tmpa:4 = reg4_4 + (reg0_4 * 1); local tmpb:4 = sext(*:1 tmpa); export tmpb; }
+szRiRb_src: [reg0_4, reg4_4]    is sz4_2 = 0x1 & reg0_4; reg4_4 { local tmpa:4 = reg4_4 + (reg0_4 * 2); local tmpb:4 = sext(*:2 tmpa); export tmpb; }
+szRiRb_src: [reg0_4, reg4_4]    is sz4_2 = 0x2 & reg0_4; reg4_4 { local tmpa:4 = reg4_4 + (reg0_4 * 4); local tmpb:4 = *:4 tmpa; export tmpb; }
+
+### unsigned source
+szRiRbu_src: [reg0_4, reg4_4]   is sz4_1 = 0x0 & reg0_4; reg4_4 { local tmpa:4 = reg4_4 + (reg0_4 * 1); local tmpb:4 = zext(*:1 tmpa); export tmpb; }
+szRiRbu_src: [reg0_4, reg4_4]   is sz4_1 = 0x1 & reg0_4; reg4_4 { local tmpa:4 = reg4_4 + (reg0_4 * 2); local tmpb:4 = zext(*:2 tmpa); export tmpb; }
+#szRiRbu_src: [reg0_4, reg4_4]   is sz4_1 = 0x2 & reg0_4; reg4_4 { local tmpa:4 = reg4_4 + (reg0_4 * 4); local tmpb:4 = *:4 tmpa; export tmpb; }
+
+szRiRb_dst: [reg0_4, reg4_4]    is sz4_2 = 0x0 & reg0_4; reg4_4 { local tmp:4 = reg4_4 + (reg0_4 * 1); export tmp; }
+szRiRb_dst: [reg0_4, reg4_4]    is sz4_2 = 0x1 & reg0_4; reg4_4 { local tmp:4 = reg4_4 + (reg0_4 * 2); export tmp; }
+szRiRb_dst: [reg0_4, reg4_4]    is sz4_2 = 0x2 & reg0_4; reg4_4 { local tmp:4 = reg4_4 + (reg0_4 * 4); export tmp; }
+
+
+## Memory infix version of LD source operand with displacement that scales by size of data
+ld_src: szld_src          is mode_ld = 0x3  & szld_src         [ mode_sz = mode_mi; ] { build szld_src; export szld_src; }
+ld_src: szld_src^szdsc    is mode_ld != 0x3 & szld_src & szdsc [ mode_sz = mode_mi; ] { build szld_src; export szld_src; }
+
+ldu_src: szldu_src        is mode_ld = 0x3  & szldu_src         [ mode_sz = mode_mi; ] { build szldu_src; export szldu_src; }
+ldu_src: szldu_src^szdsc  is mode_ld != 0x3 & szldu_src & szdsc [ mode_sz = mode_mi; ] { build szldu_src; export szldu_src; }
+
+## Memory infix version of LD destination operand with displacement that scales by size of data
+ld_dst: szld_dst          is mode_ld = 0x3  & szld_dst         [ mode_sz = mode_mi; ] { build szld_dst; export szld_dst; }
+ld_dst: szld_dst^szdsc    is mode_ld != 0x3 & szld_dst & szdsc [ mode_sz = mode_mi; ] { build szld_dst; export szld_dst; }
+
+
+## PC relative displacement
+pcdsp3: dsp is dsp0_3 >= 3 & dsp0_3 [ dsp = inst_start + dsp0_3; ] {
+	export *[ram]:4 dsp;
+}
+pcdsp3: dsp is dsp0_3 < 3 & dsp0_3 [ dsp = inst_start + dsp0_3 + 8; ] {
+	export *[ram]:4 dsp;
+}
+
+pcdsp8: dsp is simm8 [ dsp = inst_start + simm8; ] {
+    export *[ram]:4 dsp;
+}
+
+pcdsp16: dsp is simm16 [ dsp = inst_start + simm16; ] {
+	export *[ram]:4 dsp;
+}
+
+pcdsp24: dsp is simm24 [ dsp = inst_start + simm24; ] {
+	export *[ram]:4 dsp;
+}
+
+# NOTE: Not working, produces invalid address errors
+#pcdsp: reg0_4 is reg0_4 {
+#    local tmp:4 = inst_start + reg0_4;
+#    export *[ram]:4 tmp;
+#}
+
+
+## Registers with pre-decrement/post-increment
+rd_post: [reg4_4+]    is ad2_2 = 0x0 & sz0_2 = 0x0; reg4_4 { local tmp:4 = reg4_4; reg4_4 = reg4_4 + 1; export tmp; }
+rd_post: [reg4_4+]    is ad2_2 = 0x0 & sz0_2 = 0x1; reg4_4 { local tmp:4 = reg4_4; reg4_4 = reg4_4 + 2; export tmp; }
+rd_post: [reg4_4+]    is ad2_2 = 0x0 & sz0_2 = 0x2; reg4_4 { local tmp:4 = reg4_4; reg4_4 = reg4_4 + 4; export tmp; }
+
+rd_post: [-reg4_4]    is ad2_2 = 0x1 & sz0_2 = 0x0; reg4_4 { reg4_4 = reg4_4 - 1; local tmp:4 = reg4_4; export tmp; }
+rd_post: [-reg4_4]    is ad2_2 = 0x1 & sz0_2 = 0x1; reg4_4 { reg4_4 = reg4_4 - 2; local tmp:4 = reg4_4; export tmp; }
+rd_post: [-reg4_4]    is ad2_2 = 0x1 & sz0_2 = 0x2; reg4_4 { reg4_4 = reg4_4 - 4; local tmp:4 = reg4_4; export tmp; }
+
+rs_post: [reg4_4+]    is ad2_2 = 0x2 & sz0_2 = 0x0; reg4_4 { local tmp:4 = sext(*:1 reg4_4); reg4_4 = reg4_4 + 1; export tmp; }
+rs_post: [reg4_4+]    is ad2_2 = 0x2 & sz0_2 = 0x1; reg4_4 { local tmp:4 = sext(*:2 reg4_4); reg4_4 = reg4_4 + 2; export tmp; }
+rs_post: [reg4_4+]    is ad2_2 = 0x2 & sz0_2 = 0x2; reg4_4 { local tmp:4 = *:4 reg4_4; reg4_4 = reg4_4 + 4; export tmp; }
+
+rs_post: [-reg4_4]    is ad2_2 = 0x3 & sz0_2 = 0x0; reg4_4 { reg4_4 = reg4_4 - 1; local tmp:4 = sext(*:1 reg4_4); export tmp; }
+rs_post: [-reg4_4]    is ad2_2 = 0x3 & sz0_2 = 0x1; reg4_4 { reg4_4 = reg4_4 - 2; local tmp:4 = sext(*:2 reg4_4); export tmp; }
+rs_post: [-reg4_4]    is ad2_2 = 0x3 & sz0_2 = 0x2; reg4_4 { reg4_4 = reg4_4 - 4; local tmp:4 = *:4 reg4_4; export tmp; }
+
+rs_postu: [reg4_4+]    is ad2_2 = 0x2 & sz0_1 = 0x0; reg4_4 { local tmp:4 = zext(*:1 reg4_4); reg4_4 = reg4_4 + 1; export tmp; }
+rs_postu: [reg4_4+]    is ad2_2 = 0x2 & sz0_1 = 0x1; reg4_4 { local tmp:4 = zext(*:2 reg4_4); reg4_4 = reg4_4 + 2; export tmp; }
+#rs_postu: [reg4_4+]    is ad2_2 = 0x2 & sz0_1 = 0x2; reg4_4 { local tmp:4 = *:4 reg4_4; reg4_4 = reg4_4 + 4; export tmp; }
+
+rs_postu: [-reg4_4]    is ad2_2 = 0x3 & sz0_1 = 0x0; reg4_4 { reg4_4 = reg4_4 - 1; local tmp:4 = zext(*:1 reg4_4); export tmp; }
+rs_postu: [-reg4_4]    is ad2_2 = 0x3 & sz0_1 = 0x1; reg4_4 { reg4_4 = reg4_4 - 2; local tmp:4 = zext(*:2 reg4_4); export tmp; }
+#rs_postu: [-reg4_4]    is ad2_2 = 0x3 & sz0_1 = 0x2; reg4_4 { reg4_4 = reg4_4 - 4; local tmp:4 = *:4 reg4_4; export tmp; }
+
+
+# Get next register for instructions that take a pair indicated by first register in the pair
+nextreg: reg is reg0_4 = 0  [ reg = R1; ]  { export  R1; }
+nextreg: reg is reg0_4 = 1  [ reg = R2; ]  { export  R2; }
+nextreg: reg is reg0_4 = 2  [ reg = R3; ]  { export  R3; }
+nextreg: reg is reg0_4 = 3  [ reg = R4; ]  { export  R4; }
+nextreg: reg is reg0_4 = 4  [ reg = R5; ]  { export  R5; }
+nextreg: reg is reg0_4 = 5  [ reg = R6; ]  { export  R6; }
+nextreg: reg is reg0_4 = 6  [ reg = R7; ]  { export  R7; }
+nextreg: reg is reg0_4 = 7  [ reg = R8; ]  { export  R8; }
+nextreg: reg is reg0_4 = 8  [ reg = R9; ]  { export  R9; }
+nextreg: reg is reg0_4 = 9  [ reg = R10; ] { export R10; }
+nextreg: reg is reg0_4 = 10 [ reg = R11; ] { export R11; }
+nextreg: reg is reg0_4 = 11 [ reg = R12; ] { export R12; }
+nextreg: reg is reg0_4 = 12 [ reg = R13; ] { export R13; }
+nextreg: reg is reg0_4 = 13 [ reg = R14; ] { export R14; }
+nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
+
+################################################################
+
+# ABS - absolute value
+## ABS dest
+:ABS reg0_4 is op0_8 = 0b01111110; op4_4 = 0b0010 & reg0_4 {
+      setAbsOverflowFlag(reg0_4);
+      if (reg0_4 s>= 0) goto <skip>;
+        reg0_4 = -reg0_4;
+      <skip>
+      setResultFlags(reg0_4);
+}
+
+## ABS src, dest
+:ABS reg4_4, reg0_4 is op0_8 = 0b11111100; op0_8 = 0b00001111; reg4_4 & reg0_4 {
+     setAbsOverflowFlag(reg4_4);
+     reg0_4 = reg4_4;
+     if (reg0_4 s>= 0) goto <skip>;
+       reg0_4 = -reg0_4;
+     <skip>
+     setResultFlags(reg0_4);
+}
+
+# ADC - addition with carry
+### ADC src, dest
+### ADC #SIMM, Rd
+:ADC liop, reg0_4 is op0_8 = 0xFD; (op4_4 = 0x7 & li2_2 & ld0_2 = 0x0); (op4_4 = 0x2 & reg0_4); liop [ mode_li = li2_2; ] {
+     setAddCarryFlags(reg0_4, liop);
+     setAddOverflowFlags(reg0_4, liop);
+     reg0_4 = reg0_4 + liop + zext($(C_flag));
+     setResultFlags(reg0_4);
+}
+
+## ADC Rs, Rd
+:ADC reg4_4, reg0_4 is op0_8 = 0xFC; op0_8 = 0x0B; reg4_4 & reg0_4 {
+     setAddCarryFlags(reg0_4, reg4_4);
+     setAddOverflowFlags(reg0_4, reg4_4);
+     reg0_4 = reg0_4 + reg4_4 + zext($(C_flag));
+     setResultFlags(reg0_4);
+}
+
+## ADC dsp[Rs].L, Rd
+:ADC ld_src, reg0_4 is op0_8 = 0x06; (mi6_2 = 0x02 & mi6_2 & op2_4 = 0x08 & ld0_2 < 0b11 & ld0_2); op0_8 = 0x02; (reg4_4 & reg0_4) ... & ld_src
+	[ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	setAddCarryFlags(ld_src, reg0_4);
+	setAddOverflowFlags(ld_src, reg0_4);
+	reg0_4 = reg0_4 + ld_src + zext($(C_flag));
+	setResultFlags(reg0_4);
+}
+
+# ADD - addition without carry
+## ADD #UIMM:4, Rd
+:ADD "#"^uimm4_4, reg0_4 is op0_8 = 0x62; uimm4_4 & reg0_4 {
+	setAddFlags(uimm4_4, reg0_4);
+	setAddOverflowFlags(uimm4_4, reg0_4);
+	reg0_4 = reg0_4 + uimm4_4;
+	setResultFlags(reg0_4);
+}
+
+## ADD src,dst when memex == UB or src == Rs
+:ADD ld_src, reg0_4 is op2_6 = 0b10010 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x4; ] {
+	setAddFlags(ld_src, reg0_4);
+	setAddOverflowFlags(ld_src, reg0_4);
+	reg0_4 = reg0_4 + ld_src;
+	setResultFlags(reg0_4);
+}
+
+## ADD src,dst when memex != UB
+:ADD ld_src, reg0_4 is op0_8 = 0x06; mi6_2 & op2_4 = 0x2 & ld0_2 != 0b11 & ld0_2; reg0_4 ... &  ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	setAddFlags(ld_src, reg0_4);
+	setAddOverflowFlags(ld_src, reg0_4);
+	reg0_4 = reg0_4 + ld_src;
+	setResultFlags(reg0_4);
+}
+
+## ADD src,src2,dst -> dst = src + src2
+## ADD src,src2,dst (immediates)
+:ADD liop, reg4_4, reg0_4 is (op2_6 = 0x1C & li0_2); (reg4_4 & reg0_4); liop [ mode_li = li0_2; ] {
+	setAddFlags(liop, reg4_4);
+	setAddOverflowFlags(liop, reg4_4);
+	reg0_4 = reg4_4 + liop;
+	setResultFlags(reg0_4);
+}
+
+## when src2 = dst (for immediates) it's just ADD imm, dst
+:ADD liop, reg0_4 is (op2_6 = 0x1C & li0_2); (reg0_4 & reg0_4=reg4_4); liop [ mode_li = li0_2; ] {
+	setAddFlags(liop, reg0_4);
+	setAddOverflowFlags(liop, reg0_4);
+	reg0_4 = reg0_4 + liop;
+	setResultFlags(reg0_4);
+}
+
+## ADD src,src2,dst (registers)
+:ADD rs1_4_4, rs2_0_4, rd0_4 is op0_8 = 0xFF; op4_4 = 0x2 & rd0_4; rs1_4_4 & rs2_0_4 {
+	setAddFlags(rs1_4_4, rs2_0_4);
+	setAddOverflowFlags(rs1_4_4, rs2_0_4);
+	rd0_4 = rs1_4_4 + rs2_0_4;
+	setResultFlags(rd0_4);
+}
+
+# AND
+## AND #UIMM:4, dest
+:AND "#"^uimm4_4, reg0_4 is op0_8 = 0x64; uimm4_4 & reg0_4 {
+	reg0_4 = reg0_4 & uimm4_4;
+	setResultFlags(reg0_4);
+}
+
+## AND #simm, dest
+:AND liop, reg0_4 is op2_6 = 0b11101 & li0_2; op4_4 = 0x2 & reg0_4; liop [ mode_li = li0_2; ] {
+	reg0_4 = reg0_4 & liop;
+	setResultFlags(reg0_4);
+}
+
+## AND src,dst where memex == UB or src == Rs
+:AND ld_src, reg0_4 is op2_6 = 0b10100 & ld0_2; reg0_4 ... & ld_src [ mode_mi = 4; mode_ld = ld0_2; ] {
+	reg0_4 = reg0_4 & ld_src;
+	setResultFlags(reg0_4);
+}
+
+## AND src,dst where memex != UB
+:AND ld_src, reg0_4 is op0_8 = 0x06; (mi6_2 & op2_4 = 0b0100 & ld0_2 != 0b11 & ld0_2); reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	reg0_4 = reg0_4 & ld_src;
+	setResultFlags(reg0_4);
+}
+
+## AND src,src2,dest
+:AND rs1_4_4, rs2_0_4, rd0_4 is op0_8 = 0xFF; op4_4 = 0x4 & rd0_4; rs1_4_4 & rs2_0_4 {
+	rd0_4 = rs1_4_4 & rs2_0_4;
+	setResultFlags(rd0_4);
+}
+
+# BCLR src,dest - clear a bit (src = bit pos)
+
+## BCLR #IMM:3, dsp[Rd]
+:BCLR "#"^op0_3, ld_dst    is op2_6 = 0b111100 & ld0_2 != 0b11 & ld0_2; (op3_1 = 0x1 & op0_3) ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	*:1 ld_dst = (*:1 ld_dst) & ~(1 << (op0_3 & 7));
+}
+
+## BCLR Rs, dsp[Rd]
+:BCLR reg0_4, ld_dst       is op0_8 = 0xFC; op2_6 = 0b11001 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	*:4 ld_dst = (*:4 ld_dst) & ~(1 << (reg0_4 & 31));
+}
+
+
+## BCLR #IMM:5, Rd
+:BCLR "#"^imm, reg0_4    is op1_7 = 0b111101 & op0_1; op4_4 & reg0_4 [ imm = ((op0_1 << 4) + op4_4); ] {
+	reg0_4 = reg0_4 & ~(1 << (imm & 31));
+}
+
+
+## BCLR Rs, Rd
+:BCLR reg0_4, reg4_4 is op0_8 = 0xFC; op2_6 = 0b11001 & ld0_2 = 0b11; reg4_4 & reg0_4 {
+	reg4_4 = reg4_4 & ~(1 << (reg0_4 & 31));
+}
+
+
+# BCnd
+## BCnd.S src  (1 bit cd)
+:B^COND^".S" pcdsp3 is op4_4 = 0x1 & op3_1 & pcdsp3 & COND [ cc_val = op3_1; ] {
+	goto pcdsp3;
+}
+
+## BCnd.B src (4 bit cd, 8 bit displacement)
+:B^COND^".B" pcdsp8 is op4_4 = 0x2 & op0_4 & COND; pcdsp8 [ cc_val = op0_4; ] {
+    goto pcdsp8;
+}
+
+## BCnd.W src (1 bit cd, 16 bit displacement)
+:B^COND^".W" pcdsp16 is op1_7 = 0b11101 & op0_1 & COND; pcdsp16 [ cc_val = op0_1; ] {
+    goto pcdsp16;
+}
+
+# BMCnd src,dest - conditional bit move
+## BMCnd #IMM:3, mem
+:BM^cc "#"^op2_3, ld_dst    is op0_8 = 0xFC; op5_3 = 0b111 & op2_3 & ld0_2 != 0b11 & ld0_2; (cd0_4 & cc) ... & ld_dst [ cc_val = cd0_4; mode_ld = ld0_2; mode_mi = 0; ] {
+	local bitmask:1 = 1 << op2_3;
+	if (cc) goto <skip1>;
+		# Condition false, zero the bit
+		*:1 ld_dst = (*:1 ld_dst) & ~bitmask;
+		goto <skip2>;
+	<skip1>
+		# Condition true, set the bit
+		*:1 ld_dst = (*:1 ld_dst) | bitmask;
+	<skip2>
+}
+
+## BMCnd #IMM:5, reg
+:BM^cc "#"^op0_5, reg0_4    is op0_8 = 0xFD; op5_3 = 0b111 & op0_5; cd4_4 & reg0_4 & cc [ cc_val = cd4_4; ] {
+	local bitmask:4 = 1 << op0_5;
+	if (cc) goto <skip1>;
+		# Condition false, zero the bit
+		reg0_4 = reg0_4 & ~bitmask;
+		goto <skip2>;
+	<skip1>
+		# Condition true, set the bit
+		reg0_4 = reg0_4 | bitmask;
+	<skip2>
+}
+
+
+# BNOT
+## BNOT #IMM:3, dsp[Rd]
+:BNOT "#"^op2_3, ld_dst    is op0_8 = 0xFC; op5_3 = 0b111 & op2_3 & ld0_2 != 0b11 & ld0_2; op0_4 = 0xF ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	*:1 ld_dst = (*:1 ld_dst) ^ (1 << op2_3:1);
+}
+
+## BNOT reg, dsp[Rd]
+:BNOT reg0_4, ld_dst    is op0_8 = 0xFC; op2_6 = 0b11011 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	*:4 ld_dst = (*:4 ld_dst) ^ (1 << (reg0_4 & 31));
+}
+
+## BNOT #IMM:5, reg
+:BNOT "#"^op0_5, reg0_4    is op0_8 = 0xFD; op5_3 = 0b111 & op0_5; op4_4 = 0xF & reg0_4 {
+	reg0_4 = reg0_4 ^ (1 << op0_5:4);
+}
+
+## BNOT reg, reg
+:BNOT reg0_4, reg4_4    is op0_8 = 0xFC; op2_6 = 0b11011 & ld0_2 = 0b11; reg4_4 & reg0_4 {
+	reg4_4 = reg4_4 ^ (reg0_4 & 31);
+}
+
+
+# BRA - unconditional relative branch p. 69
+## BRA.S #IMM:3
+:BRA.S pcdsp3 is op3_5 = 0b1 & pcdsp3 {
+    goto pcdsp3;
+}
+
+## BRA.B #IMM:8
+:BRA.B pcdsp8 is op0_8 = 0x2E; pcdsp8 {
+    goto pcdsp8;
+}
+
+## BRA.W #IMM:16
+:BRA.W pcdsp16 is op0_8 = 0x38; pcdsp16 {
+    goto pcdsp16;
+}
+
+## BRA.A #IMM:24
+:BRA.A pcdsp24 is op0_8 = 0x04; pcdsp24 {
+    goto pcdsp24;
+}
+
+## BRA.L reg
+#:BRA.L pcdsp    is op0_8 = 0x7F; op4_4 = 0x4 & pcdsp {
+#    build pcdsp;
+#    goto pcdsp;
+#}
+:BRA.L reg0_4    is op0_8 = 0x7F; op4_4 = 0x4 & reg0_4 {
+    goto [inst_start + reg0_4];
+}
+
+
+# BRK - unconditional trap
+:BRK is op0_8 = 0x00 {
+	local tmp0 = PSW;
+	$(U_flag) = 0;
+	$(I_flag) = 0;
+	$(PM) = 0;
+	local tmp1 = PC + 1;
+    PC = *:4 INTB;
+    push32(tmp0);
+    push32(tmp1);
+    call [PC];
+}
+
+
+# BSET - set bit
+## BSET #IMM:3, dsp[Rd]
+:BSET "#"^op0_3, ld_dst    is op2_6 = 0b111100 & ld0_2 != 0b11 & ld0_2; (op3_1 = 0b0 & op0_3) ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	local bitmask:1 = 1 << op0_3;
+	*:1 ld_dst = (*:1 ld_dst) | bitmask;
+}
+
+## BSET Rs, dsp[Rd]
+:BSET reg0_4, ld_dst    is op0_8 = 0xFC; op2_6 = 0b11000 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	local bitmask:4 = 1 << (reg0_4 & 31);
+	*:4 ld_dst = (*:4 ld_dst) | bitmask;
+}
+
+## BSET #IMM:5, Rd
+:BSET "#"^imm5, reg0_4    is op1_7 = 0b111100 & op0_1; op4_4 & reg0_4 [ imm5 = (op0_1 << 4) + op4_4; ] {
+	local bitmask:4 = 1 << imm5;
+	reg0_4 = reg0_4 | bitmask;
+}
+
+## BSET Rs, Rd
+:BSET reg0_4, reg4_4    is op0_8 = 0xFC; op2_6 = 0b11000 & ld0_2 = 0b11; reg4_4 & reg0_4 {
+	local bitmask:4 = 1 << (reg0_4 & 31);
+	reg4_4 = reg4_4 | bitmask;
+}
+
+
+# BSR - branch to subroutine
+## BSR.W
+:BSR.W pcdsp16    is op0_8 = 0x39; pcdsp16 {
+    local tmp:4 = inst_next;
+    push32(tmp);
+	call pcdsp16;
+}
+
+:BSR.A pcdsp24    is op0_8 = 0x05; pcdsp24 {
+    local tmp:4 = inst_next;
+    push32(tmp);
+	call pcdsp24;
+}
+
+#:BSR.L pcdsp    is op0_8 = 0x7F; op4_4 = 0x5 & pcdsp {
+#    local tmp:4 = inst_next;
+#    push32(tmp);
+#	call pcdsp;
+#}
+:BSR.L reg0_4    is op0_8 = 0x7F; op4_4 = 0x5 & reg0_4 {
+    local tmp:4 = inst_next;
+    push32(tmp);
+	call [inst_start + reg0_4];
+}
+
+
+# BTST - test a bit (C=bit is 1, Z=bit is 0)
+## BTST #IMM:3, dsp[Rd]
+:BTST "#"^op0_3, ld_dst    is op2_6 = 0b111101 & ld0_2 != 0b11 & ld0_2; (op0_3 & op3_1 = 0b0) ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	local bitmask:1 = 1 << op0_3;
+	local tmp:1 = *:1 ld_dst;
+	tmp = tmp & bitmask;
+	$(C_flag) = (tmp != 0);
+	$(Z_flag) = (tmp == 0);
+}
+
+## BTST Rs, dsp[Rs2]
+:BTST reg0_4, ld_dst    is op0_8 = 0xFC; op2_6 = 0b11010 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_dst [ mode_ld = ld0_2; mode_mi = 0; ] {
+	local bitmask:1 = 1 << (reg0_4 & 7);
+	local tmp:1 = *:1 ld_dst;
+	tmp = tmp & bitmask;
+	$(C_flag) = (tmp != 0);
+	$(Z_flag) = (tmp == 0);
+}
+
+## BTST #IMM:5, Rd
+:BTST "#"^imm5, reg0_4    is op1_7 = 0b111110 & op0_1; op4_4 & reg0_4 [ imm5 = (op0_1 << 4) + op4_4; ] {
+	local bitmask:4 = 1 << imm5;
+	local tmp:4 = reg0_4 & bitmask;
+	$(C_flag) = (tmp != 0);
+	$(Z_flag) = (tmp == 0);
+}
+
+## BTST Rs, Rs2
+:BTST reg0_4, reg4_4    is op0_8 = 0xFC; op2_6 = 0b11010 & ld0_2 = 0b11; reg4_4 & reg0_4 {
+	local bitmask:4 = 1 << (reg0_4 & 31);
+	local tmp:4 = reg4_4 & bitmask;
+	$(C_flag) = (tmp != 0);
+	$(Z_flag) = (tmp == 0);
+}
+
+
+# CLRPSW - clear flag in PSW
+#:CLRPSW cbflag is    op0_8 = 0x7F; op4_4 = 0xB & cbflag unimpl
+
+:CLRPSW^" C" is op0_8 = 0x7F; op0_8 = 0xB0 { $(C_flag) = 0; }
+:CLRPSW^" Z" is op0_8 = 0x7F; op0_8 = 0xB1 { $(Z_flag) = 0; }
+:CLRPSW^" S" is op0_8 = 0x7F; op0_8 = 0xB2 { $(S_flag) = 0; }
+:CLRPSW^" O" is op0_8 = 0x7F; op0_8 = 0xB3 { $(O_flag) = 0; }
+:CLRPSW^" I" is op0_8 = 0x7F; op0_8 = 0xB8 { $(I_flag) = 0; }
+:CLRPSW^" U" is op0_8 = 0x7F; op0_8 = 0xB9 { $(U_flag) = 0; }
+
+
+# CMP
+## CMP #UIMM:4, Rs
+:CMP "#"^uimm4_4, reg0_4    is op0_8 = 0x61; uimm4_4 & reg0_4 {
+	setSubtractFlags(reg0_4, uimm4_4);
+	setSubtractOverflowFlags(reg0_4, uimm4_4);
+	local tmp:4 = reg0_4 - zext(uimm4_4:1);
+	setResultFlags(tmp);
+}
+
+## CMP #UIMM:8, Rs2
+:CMP "#"^imm8, reg0_4    is op0_8 = 0x75; op4_4 = 0x5 & reg0_4; imm8 {
+	setSubtractFlags(reg0_4, imm8);
+	setSubtractOverflowFlags(reg0_4, imm8);
+	local tmp:4 = reg0_4 - imm8;
+	setResultFlags(tmp);
+}
+
+## CMP #SIMM, Rs2
+:CMP liop, reg0_4    is op2_6 = 0b11101 & li0_2; op4_4 = 0x0 & reg0_4; liop [ mode_li = li0_2; ] {
+    build liop;
+	setSubtractFlags(reg0_4, liop);
+	setSubtractOverflowFlags(reg0_4, liop);
+	local tmp:4 = reg0_4 - liop;
+	setResultFlags(tmp);
+}
+
+## CMP dsp[Rs].memex, Rs2
+## memex = UB or src == Rs
+:CMP ld_src, reg0_4    is op2_6 = 0b10001 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    build ld_src;
+	setSubtractFlags(reg0_4, ld_src);
+	setSubtractOverflowFlags(reg0_4, ld_src);
+	local tmp:4 = reg0_4 - ld_src;
+	setResultFlags(tmp);
+}
+## when memex != UB
+:CMP ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    build ld_src;
+	setSubtractFlags(reg0_4, ld_src);
+	setSubtractOverflowFlags(reg0_4, ld_src);
+	local tmp:4 = reg0_4 - ld_src;
+	setResultFlags(tmp);
+}
+
+
+# DIV
+## DIV #SIMM, Rd
+:DIV liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b00; op4_4 = 8 & reg0_4; liop [ mode_li = li2_2; ] {
+	if (liop == 0 || (liop == -2147483648 && reg0_4 == -1)) goto <overflow>;
+		reg0_4 = reg0_4 s/ liop;
+		goto <end>;
+	<overflow>
+		$(O_flag) = 1;
+	<end>
+}
+
+## DIV dsp[Rs].memex, Rd
+## when memex == UB or src == Rs
+:DIV ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b1000 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+	if (ld_src == 0 || (ld_src == -2147483648 && reg0_4 == -1)) goto <overflow>;
+		reg0_4 = reg0_4 s/ ld_src;
+		goto <end>;
+	<overflow>
+		$(O_flag) = 1;
+	<end>
+}
+
+## when memex != UB
+:DIV  ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x08; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	if (ld_src == 0 || (ld_src == -2147483648 && reg0_4 == -1)) goto <overflow>;
+		reg0_4 = reg0_4 s/ ld_src;
+		goto <end>;
+	<overflow>
+		$(O_flag) = 1;
+	<end>
+}
+
+
+# DIVU
+## DIVU #SIMM, Rd
+:DIVU liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b00; op4_4 = 0x9 & reg0_4; liop [ mode_li = li2_2; ] {
+	if (liop == 0) goto <overflow>;
+		reg0_4 = reg0_4 / liop;
+		goto <end>;
+	<overflow>
+		$(O_flag) = 1;
+	<end>
+}
+
+## DIVU dsp[Rs].memex, Rd
+## when memex == UB or src == Rs
+:DIVU ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b1001 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+	if (ld_src == 0) goto <overflow>;
+		reg0_4 = reg0_4 / ld_src;
+		goto <end>;
+	<overflow>
+		$(O_flag) = 1;
+	<end>
+}
+
+## when memex != UB
+:DIVU ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x09; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	if (ld_src == 0) goto <overflow>;
+		reg0_4 = reg0_4 / ld_src;
+		goto <end>;
+	<overflow>
+		$(O_flag) = 1;
+	<end>
+}
+
+
+# EMACA - TODO
+# EMSBA - TODO
+
+
+# EMUL src, dest (dest2:dest = dest * src)
+# max dest = R14 (R15:R14)
+## EMUL #SIMM, Rd
+:EMUL liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b00; op4_4 = 0x6 & op0_4 < 15 & reg0_4 & nextreg; liop [ mode_li = li2_2; ] {
+	local tmp:8;
+	tmp = sext(liop) * sext(reg0_4);
+	nextreg = tmp(4);
+	reg0_4 = tmp:4;
+}
+
+## EMUL dsp[Rs].memex, Rd
+## when memex == UB or src == Rs
+:EMUL ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b110 & ld0_2; (op0_4 < 15 & reg0_4 & nextreg) ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+	local tmp:8;
+	tmp = sext(ld_src) * sext(reg0_4);
+	nextreg = tmp(4);
+	reg0_4 = tmp:4;
+}
+
+## when memex != UB
+:EMUL ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x06; (op0_4 < 15 & reg0_4 & nextreg) ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	local tmp:8;
+	tmp = sext(ld_src) * sext(reg0_4);
+	nextreg = tmp(4);
+	reg0_4 = tmp:4;
+}
+
+
+# EMULA - TODO
+
+
+# EMULU
+# max dest = R14 (R15:R14)
+## EMULU #SIMM, Rd
+:EMULU liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b00; op4_4 = 0x7 & op0_4 < 15 & reg0_4 & nextreg; liop [ mode_li = li2_2; ] {
+	local tmp:8;
+	tmp = zext(liop) * zext(reg0_4);
+	nextreg = tmp(4);
+	reg0_4 = tmp:4;
+}
+
+## EMULU dsp[Rs].memex, Rd
+## when memex == UB or src == Rs
+:EMULU ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b111 & ld0_2; (op0_4 < 15 & reg0_4 & nextreg) ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+	local tmp:8;
+	tmp = zext(ld_src) * zext(reg0_4);
+	nextreg = tmp(4);
+	reg0_4 = tmp:4;
+}
+
+## when memex != UB
+:EMULU ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x07; (op0_4 < 15 & reg0_4 & nextreg) ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	local tmp:8;
+	tmp = zext(ld_src) * zext(reg0_4);
+	nextreg = tmp(4);
+	reg0_4 = tmp:4;
+}
+
+
+# FADD
+## FADD src, dest
+### FADD #IMM:32, Rd
+:FADD "#"^simm32, reg0_4    is op0_8 = 0xFD; op0_8 = 0x72; op4_4 = 0x2 & reg0_4; simm32 {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f+ simm32;
+    setFloatResultFlags(reg0_4);
+}
+
+### FADD dsp[Rs], Rd
+:FADD ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100010 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f+ ld_src;
+    setFloatResultFlags(reg0_4);
+}
+
+## FADD src, src2, dest
+:FADD rs1_4_4, rs2_0_4, rd0_4    is op0_8 = 0xFF; op4_4 = 0xA & rd0_4; rs1_4_4 & rs2_0_4 {
+    # TODO: FPSW flags
+    rd0_4 = rs2_0_4 f+ rs1_4_4;
+    setFloatResultFlags(rd0_4);
+}
+
+
+# FCMP
+## FCMP #IMM:32, Rs
+:FCMP "#"^simm32, reg0_4    is op0_8 = 0xFD; op0_8 = 0x72; op4_4 = 0x1 & reg0_4; simm32 {
+    #$(Z_flag) = (reg0_4 f== simm32);
+    #$(S_flag) = (reg0_4 f< simm32);
+    # TODO: O flag and FPSW flags
+    local tmp = reg0_4 f- simm32;
+    setFloatResultFlags(tmp);
+}
+
+## FCMP dsp[Rs], Rs2
+:FCMP ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100001 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    $(Z_flag) = (reg0_4 f== ld_src);
+    $(S_flag) = (reg0_4 f< ld_src);
+    # TODO: O flag and FPSW flags
+}
+
+
+# FDIV
+## FDIV #IMM:32, Rd
+:FDIV "#"^simm32, reg0_4    is op0_8 = 0xFD; op0_8 = 0x72; op4_4 = 0x4 & reg0_4; simm32 {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f/ simm32;
+    setFloatResultFlags(reg0_4);
+}
+
+## FDIV dsp[Rs], Rd
+:FDIV ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100100 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f/ ld_src;
+    setFloatResultFlags(reg0_4);
+}
+
+
+# FMUL - p. 95
+## FMUL #IMM:32, Rd
+:FMUL "#"^simm32, reg0_4    is op0_8 = 0xFD; op0_8 = 0x72; op4_4 = 0x3 & reg0_4; simm32 {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f* simm32;
+    setFloatResultFlags(reg0_4);
+}
+
+## FMUL dsp[Rs], Rd
+:FMUL ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100011 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f* ld_src;
+    setFloatResultFlags(reg0_4);
+}
+
+## FMUL Rs, Rs2, Rd
+:FMUL rs1_4_4, rs2_0_4, rd0_4    is op0_8 = 0xFF; op4_4 = 0xB & rd0_4; rs1_4_4 & rs2_0_4 {
+    # TODO: FPSW flags
+    rd0_4 = rs2_0_4 f* rs1_4_4;
+    setFloatResultFlags(rd0_4);
+}
+
+
+# FSQRT - floating point square root p. 98
+:FSQRT ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b101000 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags
+    reg0_4 = sqrt(ld_src);
+    setFloatResultFlags(reg0_4);
+}
+
+
+# FSUB
+## FSUB #IMM:32, Rd
+:FSUB "#"^simm32, reg0_4    is op0_8 = 0xFD; op0_8 = 0x72; op4_4 = 0x0 & reg0_4; simm32 {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f- simm32;
+    setFloatResultFlags(reg0_4);
+}
+
+## FSUB dsp[Rs], Rd
+:FSUB ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100000 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags
+    reg0_4 = reg0_4 f- ld_src;
+    setFloatResultFlags(reg0_4);
+}
+
+## FSUB Rs, Rs2, Rd
+:FSUB rs1_4_4, rs2_0_4, rd0_4    is op0_8 = 0xFF; op4_4 = 0x8 & rd0_4; rs1_4_4 & rs2_0_4 {
+    # TODO: FPSW flags
+    rd0_4 = rs2_0_4 f- rs1_4_4;
+    setFloatResultFlags(rd0_4);
+}
+
+
+# FTOI - float to signed integer p. 103
+:FTOI ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100101 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags, rounding
+    reg0_4 = round(ld_src);
+    setResultFlags(reg0_4);
+}
+
+
+# FTOU - float to unsigned integer p. 106
+:FTOU ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b101001 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: FPSW flags, rounding
+    reg0_4 = round(ld_src);
+    setResultFlags(reg0_4);
+}
+
+
+# INT
+:INT "#"^imm8    is op0_8 = 0x75; op0_8 = 0x60; imm8 {
+    local tmp_psw:4 = PSW;
+    $(U_flag) = 0;
+    $(I_flag) = 0;
+    $(PM) = 0;
+    local tmp_pc:4 = PC + 3;
+    local intf:4 = INTB + (imm8 * 4);
+    PC = *:4 intf;
+    push32(tmp_psw);
+    push32(tmp_pc);
+    call [PC];
+}
+
+
+# ITOF
+## ITOF dsp[Rs], Rd
+## when memex == UB or src == Rs
+:ITOF ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b10001 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    # TODO: Use RM bits of FPSW for rounding mode
+    # TODO: FPSW flags
+    reg0_4 = int2float(ld_src);
+}
+
+## when memex != UB
+:ITOF ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x11; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    # TODO: Use RM bits of FPSW for rounding mode
+    # TODO: FPSW flags
+    reg0_4 = int2float(ld_src);
+}
+
+
+# JMP
+:JMP reg0_4    is op0_8 = 0x7F; op4_4 = 0x0 & reg0_4 {
+	PC = reg0_4;
+}
+
+
+# JSR - jump to subroutine
+:JSR reg0_4    is op0_8 = 0x7F; op4_4 = 0x1 & reg0_4 {
+	local tmp:4 = inst_next;
+	push32(tmp);
+	PC = reg0_4;
+}
+
+
+# MACHI - TODO
+# MACLH - TODO
+# MACLO - TODO
+
+
+# MAX - max value select
+## MAX #SIMM, Rd
+:MAX liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b00; op4_4 = 0x4 & reg0_4; liop [ mode_li = li2_2; ] {
+	if (liop > reg0_4) goto <skip>;
+		reg0_4 = liop;
+	<skip>
+}
+
+## MAX dsp[Rs], Rd
+## when memex == UB or src == Rs
+:MAX ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+	if (ld_src > reg0_4) goto <skip>;
+		reg0_4 = ld_src;
+	<skip>
+}
+
+## when memex != UB
+:MAX ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2; op0_8 = 0x04; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	if (ld_src > reg0_4) goto <skip>;
+		reg0_4 = ld_src;
+	<skip>
+}
+
+
+# MIN
+## MIN #SIMM, Rd
+:MIN liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b00; op4_4 = 0x5 & reg0_4; liop [ mode_li = li2_2; ] {
+	if (liop > reg0_4) goto <skip>;
+		reg0_4 = liop;
+	<skip>
+}
+
+## MIN dsp[Rs], Rd
+## when memex == UB or src == Rs
+:MIN ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b101 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+	if (ld_src > reg0_4) goto <skip>;
+		reg0_4 = ld_src;
+	<skip>
+}
+
+## when memex != UB
+:MIN ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2; op0_8 = 0x05; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+	if (ld_src > reg0_4) goto <skip>;
+		reg0_4 = ld_src;
+	<skip>
+}
+
+
+# MOV - p. 253
+## (1) MOV.size Rs, dsp:5[Rd]
+:MOV^szdsc szrs, szrddsp    is op6_2 = 0b10 & sz4_2 = 0x0 & sz4_2 & op3_1 = 0b0 & dsp0_3; dsp7_1 & dsp3_1 & szrs & szrddsp & szdsc [ pass_dsp = (dsp0_3 << 2) + (dsp7_1 << 1) + dsp3_1; mode_sz = sz4_2; ] {
+    *:1 szrddsp = szrs:1;
+}
+:MOV^szdsc szrs, szrddsp    is op6_2 = 0b10 & sz4_2 = 0x1 & sz4_2 & op3_1 = 0b0 & dsp0_3; dsp7_1 & dsp3_1 & szrs & szrddsp & szdsc [ pass_dsp = (dsp0_3 << 2) + (dsp7_1 << 1) + dsp3_1; mode_sz = sz4_2; ] {
+    *:2 szrddsp = szrs:2;
+}
+:MOV^szdsc szrs, szrddsp    is op6_2 = 0b10 & sz4_2 = 0x2 & sz4_2 & op3_1 = 0b0 & dsp0_3; dsp7_1 & dsp3_1 & szrs & szrddsp & szdsc [ pass_dsp = (dsp0_3 << 2) + (dsp7_1 << 1) + dsp3_1; mode_sz = sz4_2; ] {
+    *:4 szrddsp = szrs:4;
+}
+
+## (2) MOV.size dsp:5[Rs], Rd
+:MOV^szdsc szrsdsp, rd0_3   is op6_2 = 0b10 & sz4_2 < 3 & sz4_2 & op3_1 = 0b1 & dsp0_3; rd0_3 & dsp7_1 & dsp3_1 & szrsdsp & szdsc [ pass_dsp = (dsp0_3 << 2) + (dsp7_1 << 1) + dsp3_1; mode_sz = sz4_2; ] {
+    rd0_3 = szrsdsp;
+}
+
+## (3) MOV.L #UIMM:4, Rd
+:MOV^".L" "#"^uimm4_4, reg0_4    is op0_8 = 0x66; uimm4_4 & reg0_4 {
+    reg0_4 = zext(uimm4_4:1);
+}
+
+## (4.1) MOV.B #IMM:8, dsp:5[Rd]
+:MOV^szdsc "#"^simm8, szrddsp    is op2_6 = 0b1111 & sz0_2 = 0x0 & sz0_2; dsp7_1 & dsp0_4 & szrddsp & szdsc; simm8 [ mode_sz = sz0_2; pass_dsp = (dsp7_1 << 4) + dsp0_4; ] {
+    *:1 szrddsp = simm8;
+}
+
+## (4.2) MOV.W/L #UIMM:8, dsp:5[Rd]
+:MOV^szdsc "#"^imm8, szrddsp    is op2_6 = 0b1111 & sz0_2 = 0x1 & sz0_2; dsp7_1 & dsp0_4 & szrddsp & szdsc; imm8 [ mode_sz = sz0_2; pass_dsp = (dsp7_1 << 4) + dsp0_4; ] {
+    *:2 szrddsp = zext(imm8:1);
+}
+:MOV^szdsc "#"^imm8, szrddsp    is op2_6 = 0b1111 & sz0_2 = 0x2 & sz0_2; dsp7_1 & dsp0_4 & szrddsp & szdsc; imm8 [ mode_sz = sz0_2; pass_dsp = (dsp7_1 << 4) + dsp0_4; ] {
+    *:4 szrddsp = zext(imm8:1);
+}
+
+## (5) MOV.L #UIMM:8, Rd
+:MOV^".L" "#"^imm8, reg0_4    is op0_8 = 0x75; op4_4 = 0x4 & reg0_4; imm8 {
+    reg0_4 = zext(imm8:1);
+}
+
+## (6) MOV.L #SIMM, Rd
+:MOV^".L" liop, reg4_4    is op0_8 = 0xFB; reg4_4 & li2_2 & op0_2 = 0b10; liop [ mode_li = li2_2; ] {
+    reg4_4 = liop;
+}
+
+## (7.1) MOV.B/W as L Rs, Rd
+## (7.2) MOV.L        Rs, Rd
+:MOV^szdsc szrs3, reg0_4    is op6_2 = 0b11 & sz4_2 < 3 & sz4_2 & op0_4 = 0xF; reg0_4 & szrs3 & szdsc [ mode_sz = sz4_2; ] {
+    reg0_4 = szrs3;
+}
+
+## (8.1) MOV.B #IMM:8, dsp[Rd]
+## (8.2) MOV.W #SIMM:8, dsp[Rd]
+## (8.3) MOV.W #IMM:16, dsp[Rd]
+## (8.4) MOV.L #SIMM, dsp[Rd]
+:MOV^szdsc liop, szld_dst    is szdsc & op2_6 = 0b111110 & ld0_2; (li2_2 & sz0_2 = 0x0 & sz0_2) ... & szld_dst; liop [ mode_li = li2_2; mode_ld = ld0_2; mode_sz = sz0_2; ] {
+    *:1 szld_dst = liop:1;
+}
+:MOV^szdsc liop, szld_dst    is szdsc & op2_6 = 0b111110 & ld0_2; (li2_2 & sz0_2 = 0x1 & sz0_2) ... & szld_dst; liop [ mode_li = li2_2; mode_ld = ld0_2; mode_sz = sz0_2; ] {
+    *:2 szld_dst = liop:2;
+}
+:MOV^szdsc liop, szld_dst    is szdsc & op2_6 = 0b111110 & ld0_2; (li2_2 & sz0_2 = 0x2 & sz0_2) ... & szld_dst; liop [ mode_li = li2_2; mode_ld = ld0_2; mode_sz = sz0_2; ] {
+    *:4 szld_dst = liop:4;
+}
+
+## (9) MOV.B/W/L as L dsp[Rs], Rd
+:MOV^szdsc szld_src, reg0_4    is szdsc & op6_2 = 0b11 & sz4_2 < 3 & sz4_2 & op2_2 = 0b11 & ld0_2; reg0_4 ... & szld_src [ mode_sz = sz4_2; mode_ld = ld0_2; ] {
+    reg0_4 = szld_src;
+}
+
+## (10) MOV.B/W/L as L [Ri, Rb], Rd
+:MOV^szdsc szRiRb_src, reg0_4    is szdsc & (op0_8 = 0xFE; op6_2 = 0b01 & sz4_2; reg0_4) & (op0_8 = 0xFE; szRiRb_src) [ mode_sz = sz4_2; ] {
+    build szRiRb_src;
+    reg0_4 = szRiRb_src;
+}
+
+## (11) MOV.B/W/L Rs, dsp[Rd]
+:MOV^szdsc szrs2, szld_dst    is szdsc & op6_2 = 0b11 & sz4_2 = 0x0 & sz4_2 & ld2_2 & op0_2 = 0b11; szrs2 ... & szld_dst [ mode_ld = ld2_2; mode_sz = sz4_2; ] {
+    *:1 szld_dst = szrs2:1;
+}
+:MOV^szdsc szrs2, szld_dst    is szdsc & op6_2 = 0b11 & sz4_2 = 0x1 & sz4_2 & ld2_2 & op0_2 = 0b11; szrs2 ... & szld_dst [ mode_ld = ld2_2; mode_sz = sz4_2; ] {
+    *:2 szld_dst = szrs2:2;
+}
+:MOV^szdsc szrs2, szld_dst    is szdsc & op6_2 = 0b11 & sz4_2 = 0x2 & sz4_2 & ld2_2 & op0_2 = 0b11; szrs2 ... & szld_dst [ mode_ld = ld2_2; mode_sz = sz4_2; ] {
+    *:4 szld_dst = szrs2;
+}
+
+## (12) MOV.B/W/L Rs, [Ri, Rb]
+:MOV^szdsc szrs2, szRiRb_dst    is szdsc & (op0_8 = 0xFE; op6_2 = 0b00 & sz4_2 = 0x0 & sz4_2; szrs2) & (op0_8 = 0xFE; szRiRb_dst) [ mode_sz = sz4_2; ] {
+    *:1 szRiRb_dst = szrs2:1;
+}
+:MOV^szdsc szrs2, szRiRb_dst    is szdsc & (op0_8 = 0xFE; op6_2 = 0b00 & sz4_2 = 0x1 & sz4_2; szrs2) & (op0_8 = 0xFE; szRiRb_dst) [ mode_sz = sz4_2; ] {
+    *:2 szRiRb_dst = szrs2:2;
+}
+:MOV^szdsc szrs2, szRiRb_dst    is szdsc & (op0_8 = 0xFE; op6_2 = 0b00 & sz4_2 = 0x2 & sz4_2; szrs2) & (op0_8 = 0xFE; szRiRb_dst) [ mode_sz = sz4_2; ] {
+    *:4 szRiRb_dst = szrs2;
+}
+
+## (13) MOV.B/W/L dsp[Rs], dsp[Rd]
+:MOV^szdsc szld_src, szld2_dst    is szdsc & op6_2 = 0b11 & sz4_2 = 0x0 & sz4_2 & ld2_2 & ld0_2; reg0_4 ... & (szld_src & szld2_dst) [ mode_ld = ld0_2; mode_ld2 = ld2_2; mode_sz = sz4_2; ] {
+    *:1 szld2_dst = szld_src:1;
+}
+:MOV^szdsc szld_src, szld2_dst    is szdsc & op6_2 = 0b11 & sz4_2 = 0x1 & sz4_2 & ld2_2 & ld0_2; reg0_4 ... & (szld_src & szld2_dst) [ mode_ld = ld0_2; mode_ld2 = ld2_2; mode_sz = sz4_2; ] {
+    *:2 szld2_dst = szld_src:2;
+}
+:MOV^szdsc szld_src, szld2_dst    is szdsc & op6_2 = 0b11 & sz4_2 = 0x2 & sz4_2 & ld2_2 & ld0_2; reg0_4 ... & (szld_src & szld2_dst) [ mode_ld = ld0_2; mode_ld2 = ld2_2; mode_sz = sz4_2; ] {
+    *:4 szld2_dst = szld_src;
+}
+
+## (14.1) MOV.B/W/L Rs, [Rd+] (post-increment)
+## (14.2) MOV.B/W/L Rs, [-Rd] (pre-decrement)
+:MOV^szdsc szrs2, rd_post    is (szdsc & op0_8 = 0xFD); (op4_4 = 0x2 & ad2_2 <= 0x1 & ad2_2 & sz0_2 = 0x0 & sz0_2; szrs2) & rd_post [ mode_sz = sz0_2; ] {
+    *:1 rd_post = szrs2:1;
+}
+:MOV^szdsc szrs2, rd_post    is (szdsc & op0_8 = 0xFD); (op4_4 = 0x2 & ad2_2 <= 0x1 & ad2_2 & sz0_2 = 0x1 & sz0_2; szrs2) & rd_post [ mode_sz = sz0_2; ] {
+    *:2 rd_post = szrs2:2;
+}
+:MOV^szdsc szrs2, rd_post    is (szdsc & op0_8 = 0xFD); (op4_4 = 0x2 & ad2_2 <= 0x1 & ad2_2 & sz0_2 = 0x2 & sz0_2; szrs2) & rd_post [ mode_sz = sz0_2; ] {
+    *:4 rd_post = szrs2;
+}
+
+## (15.1) MOV.B/W/L as L [Rs+], Rd
+## (15.2) MOV.B/W/L as L [-Rs], Rd
+:MOV^szdsc rs_post, reg0_4    is (szdsc & op0_8 = 0xFD); (op4_4 = 0x2 & ad2_2 >= 0x2 & ad2_2 & sz0_2; reg0_4) & rs_post [ mode_sz = sz0_2; ] {
+    reg0_4 = rs_post;
+}
+
+
+# MOVCO - Store with LI flag clear
+:MOVCO reg0_4, [reg4_4]    is op0_8 = 0xFD; op0_8 = 0x27; reg4_4 & reg0_4 {
+    if ($(LI_flag) == 0) goto <fail>;
+        *:4 reg4_4 = reg0_4;
+        reg0_4 = 0;
+    goto <end>;
+    <fail>
+        reg0_4 = 1;
+    <end>
+    $(LI_flag) = 0;
+}
+
+
+# MOVLI - Load with LI flag set
+:MOVLI [reg4_4], reg0_4    is op0_8 = 0xFD; op0_8 = 0x2F; reg4_4 & reg0_4 {
+    $(LI_flag) = 1;
+    reg0_4 = *:4 reg4_4;
+}
+
+
+# MOVU - Transfer unsigned data
+## (1) MOVU.B/W as L dsp:5[Rs], Rd
+:MOVU^szdsc szrsdspu, rd0_3   is op4_4 = 0xB & sz3_1 & dsp0_3; rd0_3 & dsp7_1 & dsp3_1 & szrsdspu & szdsc [ pass_dsp = (dsp0_3 << 2) + (dsp7_1 << 1) + dsp3_1; mode_sz = sz3_1; ] {
+    build szrsdspu;
+    rd0_3 = szrsdspu;
+}
+
+## (2) MOVU.B/W as L dsp[Rs], Rd
+:MOVU^szdsc szldu_src, reg0_4    is szdsc & op3_5 = 0b1011 & sz2_1 & ld0_2; reg0_4 ... & szldu_src [ mode_ld = ld0_2; mode_sz = sz2_1; ] {
+    build szldu_src;
+    reg0_4 = szldu_src;
+}
+
+## (3) MOVU.B/W as L [Ri,Rb], Rd
+:MOVU^szdsc szRiRbu_src, reg0_4    is (szdsc & op0_8 = 0xFE; op5_3 = 0b110 & sz4_1; reg0_4) & (op0_8 = 0xFE; szRiRbu_src) [ mode_sz = sz4_1; ] {
+    build szRiRbu_src;
+    reg0_4 = szRiRbu_src;
+}
+
+## (4.1) MOVU.B/W as L [Rs+], Rd
+## (4.2) MOVU.B/W as L [-Rs], Rd
+:MOVU^szdsc rs_postu, reg0_4    is (szdsc & op0_8 = 0xFD); (op4_4 = 0x3 & ad2_2 & op1_1 = 0b0 & sz0_1; reg0_4) & rs_postu [ mode_sz = sz0_1; ] {
+    build rs_postu;
+    reg0_4 = rs_postu;
+}
+
+
+## MSBHI
+## MSBLH
+## MSBLO
+
+
+## MUL
+### (1) MUL #UIMM:4, Rd
+:MUL "#"^uimm4_4, reg0_4    is op0_8 = 0x63; uimm4_4 & reg0_4 {
+    reg0_4 = reg0_4 * uimm4_4;
+}
+
+### (2) MUL #SIMM, Rd
+:MUL liop, reg0_4    is op2_6 = 0b11101 & li0_2; op4_4 = 0x1 & reg0_4; liop [ mode_li = li0_2; ] {
+    reg0_4 = reg0_4 * liop;
+}
+
+### (3) MUL dsp[Rs], Rd
+### when memex == UB or src == Rs
+:MUL ld_src, reg0_4    is op2_6 = 0b10011 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    reg0_4 = reg0_4 * ld_src;
+}
+
+### when memex != UB
+:MUL ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0x3 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    reg0_4 = reg0_4 * ld_src;
+}
+
+### (4) MUL Rs, Rs2, Rd
+:MUL rs1_4_4, rs2_0_4, rd0_4    is op0_8 = 0xFF; op4_4 = 0x3 & rd0_4; rs1_4_4 & rs2_0_4 {
+    rd0_4 = rs1_4_4 * rs2_0_4;
+}
+
+
+## MULHI
+## MULLH
+## MULLO
+## MVFACGU
+## MVFACHI
+## MVFACLO
+## MVFACMI
+
+
+## MVFC - transfer from control register
+:MVFC cr4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x6A; cr4_4 & reg0_4 {
+    reg0_4 = cr4_4;
+}
+
+
+## MVTACGU
+
+
+## MVTACHI - move high-order long to accumulator
+:MVTACHI reg0_4, adest7_1    is op0_8 = 0xFD; op0_8 = 0x17; adest7_1 & op4_3 = 0x0 & reg0_4 {
+    #adest7_1(4) = reg0_4;
+}
+
+
+## MVTACLO
+:MVTACLO reg0_4, adest7_1    is op0_8 = 0xFD; op0_8 = 0x17; adest7_1 & op4_3 = 0x1 & reg0_4 {
+    #adest7_1:4 = reg0_4;
+}
+
+
+## MVTC - transfer to control register
+## TODO: handle user mode vs supervisor mode
+### (1) MVTC #SIMM, Rx
+:MVTC liop, cr0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0b11; op4_4 = 0x0 & op0_4 != 0b1 & cr0_4; liop [ mode_li = li2_2; ] {
+    cr0_4 = liop;
+}
+
+### (2) MVTC Rs, Rx
+:MVTC reg4_4, cr0_4    is op0_8 = 0xFD; op0_8 = 0x68; reg4_4 & cr0_4 {
+    cr0_4 = reg4_4;
+}
+
+
+## MVTIPL - move to interrupt priority level
+## TODO: privileged instruction
+:MVTIPL "#"^uimm0_4    is op0_8 = 0x75; op0_8 = 0x70; op4_4 = 0x0 & uimm0_4 {
+    $(IPL) = uimm0_4;
+}
+
+
+## NEG - 2's complement
+## (1) NEG Rd
+:NEG reg0_4    is op0_8 = 0x7E; op4_4 = 0x1 & reg0_4 {
+    setAbsOverflowFlag(reg0_4);
+    reg0_4 = -reg0_4;
+    setResultFlags(reg0_4);
+    $(C_flag) = (reg0_4 == 0);
+}
+
+## (2) NEG Rs, Rd
+:NEG reg4_4, reg0_4    is op0_8 = 0xFC; op0_8 = 0x07; reg4_4 & reg0_4 {
+    setAbsOverflowFlag(reg4_4);
+    reg0_4 = -reg4_4;
+    setResultFlags(reg0_4);
+    $(C_flag) = (reg0_4 == 0);
+}
+
+
+## NOP
+:NOP    is op0_8 = 0x3 {}
+
+
+## NOT - logical negation
+### (1) NOT Rd
+:NOT reg0_4    is op0_8 = 0x7E; op4_4 = 0x0 & reg0_4 {
+    reg0_4 = ~reg0_4;
+    setResultFlags(reg0_4);
+}
+
+### (2) NOT Rs, Rd
+:NOT reg4_4, reg0_4    is op0_8 = 0xFC; op0_8 = 0x3B; reg4_4 & reg0_4 {
+    reg0_4 = ~reg4_4;
+    setResultFlags(reg0_4);
+}
+
+
+## OR
+### (1) OR #UIMM:4, Rd
+:OR "#"^uimm4_4, reg0_4    is op0_8 = 0x65; uimm4_4 & reg0_4 {
+    reg0_4 = reg0_4 | uimm4_4;
+    setResultFlags(reg0_4);
+}
+
+### (2) OR #SIMM, Rd
+:OR liop, reg0_4    is op2_6 = 0b11101 & li0_2; op4_4 = 0x3 & reg0_4; liop [ mode_li = li0_2; ] {
+    reg0_4 = reg0_4 | liop;
+    setResultFlags(reg0_4);
+}
+
+### (3) OR dsp[Rs], Rd
+#### when memex == UB or src == Rs
+:OR ld_src, reg0_4    is op2_6 = 0b10101 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    reg0_4 = reg0_4 | ld_src;
+    setResultFlags(reg0_4);
+}
+
+#### when memex != UB
+:OR ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0x5 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    reg0_4 = reg0_4 | ld_src;
+    setResultFlags(reg0_4);
+}
+
+### (4) OR Rs, Rs2, Rd
+:OR rs1_4_4, rs2_0_4, rd0_4    is op0_8 = 0xFF; op4_4 = 0x5 & rd0_4; rs1_4_4 & rs2_0_4 {
+    rd0_4 = rs1_4_4 | rs2_0_4;
+    setResultFlags(rd0_4);
+}
+
+
+## TODO: Use of U bit in PSW for which stack to use
+
+## POP
+:POP reg0_4    is op0_8 = 0x7E; op4_4 = 0xB & reg0_4 {
+    pop32(reg0_4);
+}
+
+
+## POPC - pop to control register
+:POPC cr0_4    is op0_8 = 0x7E; op4_4 = 0xE & op0_4 != 0b1 & cr0_4 {
+    pop32(cr0_4);
+}
+
+
+## POPM - pop multiple p. 151
+:POPM reg4_4^"-"^reg0_4    is op0_8 = 0x6F; op4_4 > 0 & op0_4 > op4_4 & op4_4 & op0_4 & reg4_4 & reg0_4 {
+    local rs1:4 = zext(op4_4:1);
+    local rs2:4 = zext(op0_4:1);
+
+    ### don't look at this
+    if (rs1 == 1) goto <p1>;
+    if (rs1 == 2) goto <p2>;
+    if (rs1 == 3) goto <p3>;
+    if (rs1 == 4) goto <p4>;
+    if (rs1 == 5) goto <p5>;
+    if (rs1 == 6) goto <p6>;
+    if (rs1 == 7) goto <p7>;
+    if (rs1 == 8) goto <p8>;
+    if (rs1 == 9) goto <p9>;
+    if (rs1 == 10) goto <p10>;
+    if (rs1 == 11) goto <p11>;
+    if (rs1 == 12) goto <p12>;
+    if (rs1 == 13) goto <p13>;
+    if (rs1 == 14) goto <p14>;
+    if (rs1 == 15) goto <p15>;
+    <p1>
+    pop32(R1);
+    <p2>
+    pop32(R2);
+    if (rs2 == 2) goto <end>;
+    <p3>
+    pop32(R3);
+    if (rs2 == 3) goto <end>;
+    <p4>
+    pop32(R4);
+    if (rs2 == 4) goto <end>;
+    <p5>
+    pop32(R5);
+    if (rs2 == 5) goto <end>;
+    <p6>
+    pop32(R6);
+    if (rs2 == 6) goto <end>;
+    <p7>
+    pop32(R7);
+    if (rs2 == 7) goto <end>;
+    <p8>
+    pop32(R8);
+    if (rs2 == 8) goto <end>;
+    <p9>
+    pop32(R9);
+    if (rs2 == 9) goto <end>;
+    <p10>
+    pop32(R10);
+    if (rs2 == 10) goto <end>;
+    <p11>
+    pop32(R11);
+    if (rs2 == 11) goto <end>;
+    <p12>
+    pop32(R12);
+    if (rs2 == 12) goto <end>;
+    <p13>
+    pop32(R13);
+    if (rs2 == 13) goto <end>;
+    <p14>
+    pop32(R14);
+    if (rs2 == 14) goto <end>;
+    <p15>
+    pop32(R15);
+    <end>
+}
+
+
+## PUSH
+### (1) PUSH.B/W/L as L Rs
+:PUSH^szdsc szrs2    is szdsc & op0_8 = 0x7E; op6_2 = 0b10 & sz4_2 < 3 & sz4_2 & szrs2 [ mode_sz = sz4_2; ] {
+    push32(szrs2);
+}
+
+### (2) PUSH.B/W/L as L dsp[Rs]
+:PUSH^szdsc szld_src    is szdsc & op2_6 = 0b111101 & ld0_2; (op2_2 = 0b10 & sz0_2 < 3 & sz0_2) ... & szld_src [ mode_sz = sz0_2; mode_ld = ld0_2; ] {
+    push32(szld_src);
+}
+
+
+## PUSHC
+:PUSHC cr0_4    is op0_8 = 0x7E; op4_4 = 0xC & cr0_4 {
+    push32(cr0_4);
+}
+
+
+## PUSHM - save multiple registers p. 154
+:PUSHM reg4_4^"-"^reg0_4    is op0_8 = 0x6E; op4_4 > 0 & op4_4 < op0_4 & op4_4 & op0_4 & reg4_4 & reg0_4 {
+    local rs1:4 = zext(op4_4:1);
+    local rs2:4 = zext(op0_4:1);
+
+    ### don't look here either
+    if (rs2 == 15) goto <p15>;
+    if (rs2 == 14) goto <p14>;
+    if (rs2 == 13) goto <p13>;
+    if (rs2 == 12) goto <p12>;
+    if (rs2 == 11) goto <p11>;
+    if (rs2 == 10) goto <p10>;
+    if (rs2 == 9) goto <p9>;
+    if (rs2 == 8) goto <p8>;
+    if (rs2 == 7) goto <p7>;
+    if (rs2 == 6) goto <p6>;
+    if (rs2 == 5) goto <p5>;
+    if (rs2 == 4) goto <p4>;
+    if (rs2 == 3) goto <p3>;
+    if (rs2 == 2) goto <p2>;
+    if (rs2 == 1) goto <p1>;
+    <p15>
+    push32(R15);
+    <p14>
+    push32(R14);
+    if (rs1 == 14) goto <end>;
+    <p13>
+    push32(R13);
+    if (rs1 == 13) goto <end>;
+    <p12>
+    push32(R12);
+    if (rs1 == 12) goto <end>;
+    <p11>
+    push32(R11);
+    if (rs1 == 11) goto <end>;
+    <p10>
+    push32(R10);
+    if (rs1 == 10) goto <end>;
+    <p9>
+    push32(R9);
+    if (rs1 == 9) goto <end>;
+    <p8>
+    push32(R8);
+    if (rs1 == 8) goto <end>;
+    <p7>
+    push32(R7);
+    if (rs1 == 7) goto <end>;
+    <p6>
+    push32(R6);
+    if (rs1 == 6) goto <end>;
+    <p5>
+    push32(R5);
+    if (rs1 == 5) goto <end>;
+    <p4>
+    push32(R4);
+    if (rs1 == 4) goto <end>;
+    <p3>
+    push32(R3);
+    if (rs1 == 3) goto <end>;
+    <p2>
+    push32(R2);
+    if (rs1 == 2) goto <end>;
+    <p1>
+    push32(R1);
+    <end>
+}
+
+
+## RACL
+## RACW
+## RDACL
+## RDACW
+
+
+## REVL - reverse longword data
+:REVL reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x67; reg4_4 & reg0_4 {
+    reg0_4[0,8]  = reg4_4[24,8];
+    reg0_4[8,8]  = reg4_4[16,8];
+    reg0_4[16,8] = reg4_4[8,8];
+    reg0_4[24,8] = reg4_4[0,8];
+}
+
+
+## REVW - reverse word data
+:REVW reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x65; reg4_4 & reg0_4 {
+    reg0_4[0,8]  = reg4_4[8,8];
+    reg0_4[8,8]  = reg4_4[0,8];
+
+    reg0_4[16,8] = reg4_4[24,8];
+    reg0_4[24,8] = reg4_4[16,8];
+}
+
+
+## RMPA
+
+
+## ROLC - rotation with carry to left
+:ROLC reg0_4    is op0_8 = 0x7E; op4_4 = 0x5 & reg0_4 {
+    local highbit:1 = reg0_4[31,1];
+    $(C_flag) = highbit;
+    reg0_4 = reg0_4 << 1;
+
+    if (highbit == 0) goto <end>;
+    reg0_4 = reg0_4 | 1;
+
+    <end>
+    setResultFlags(reg0_4);
+}
+
+
+## RORC - rotation with carry to right
+:RORC reg0_4    is op0_8 = 0x7E; op4_4 = 0x4 & reg0_4 {
+    local lowbit:1 = reg0_4[0,1];
+    $(C_flag) = lowbit;
+    reg0_4 = reg0_4 >> 1;
+
+    if (lowbit == 0) goto <end>;
+    reg0_4[31,1] = 1;
+
+    <end>
+    setResultFlags(reg0_4);
+}
+
+
+## ROTL - rotation to left
+### (1) ROTL #IMM:5, Rd
+:ROTL "#"^imm, reg0_4    is op0_8 = 0xFD; op1_7 = 0b110111 & op0_1; op4_4 & reg0_4 [ imm = (op0_1 << 4) + op4_4; ] {
+    local shift:1 = imm;
+    local tmp:4 = reg0_4 << shift;
+    reg0_4 = (reg0_4 >> (32 - shift)) | tmp;
+    $(C_flag) = reg0_4[0,1];
+    setResultFlags(reg0_4);
+}
+
+### (2) ROTL Rs, Rd
+:ROTL reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x66; reg4_4 & reg0_4 {
+    local shift = reg4_4 & 31;
+    local tmp:4 = reg0_4 << shift;
+    reg0_4 = (reg0_4 >> (32 - shift)) | tmp;
+    $(C_flag) = reg0_4[0,1];
+    setResultFlags(reg0_4);
+}
+
+
+## ROTR - rotation to right
+### (1) ROTR #IMM:5, Rd
+:ROTR "#"^imm, reg0_4    is op0_8 = 0xFD; op1_7 = 0b110110 & op0_1; op4_4 & reg0_4 [ imm = (op0_1 << 4) + op4_4; ] {
+    local shift:1 = imm;
+    local tmp:4 = reg0_4 >> shift;
+    reg0_4 = (reg0_4 << (32 - shift)) | tmp;
+    $(C_flag) = reg0_4[31,1];
+    setResultFlags(reg0_4);
+}
+
+### (2) ROTR Rs, Rd
+:ROTR reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x64; reg4_4 & reg0_4 {
+    local shift = reg4_4 & 31;
+    local tmp:4 = reg0_4 >> shift;
+    reg0_4 = (reg0_4 << (32 - shift)) | tmp;
+    $(C_flag) = reg0_4[31,1];
+    setResultFlags(reg0_4);
+}
+
+
+## ROUND - convert float to int
+### ROUND dsp[Rs].L, Rd (ld scale is 4 for all)
+:ROUND ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b100110 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    # TODO: rounding mode bits, FPSW
+    reg0_4 = round(ld_src);
+    setResultFlags(reg0_4);
+}
+
+
+## RTE - return from exception
+## TODO: privileged instruction
+:RTE     is op0_8 = 0x7F; op0_8 = 0x95 {
+    pop32(PC);
+    pop32(PSW);
+    $(LI_flag) = 0;
+    return [PC];
+}
+
+
+## RTFI - return from fast interrupt
+:RTFI     is op0_8 = 0x7F; op0_8 = 0x94 {
+    PSW = BPSW;
+    PC = BPC;
+    $(LI_flag) = 0;
+    return [PC];
+}
+
+
+# RTS - return from subroutine
+:RTS is op0_8 = 0x02 {
+	pop32(PC);
+    return [PC];
+}
+
+
+## RTSD - release stack frame and return from subroutine p. 177
+### (1) RTSD src
+:RTSD "#"^imm    is op0_8 = 0x67; imm8 [ imm = imm8 * 4; ] {
+    SP = SP + imm;
+    pop32(PC);
+    return [PC];
+}
+
+### (2) RTSD src, Rd-Rd2
+:RTSD "#"^imm, reg4_4^"-"^reg0_4    is op0_8 = 0x3F; op4_4 > 0 & op0_4 >= op4_4 & op4_4 & op0_4 & reg4_4 & reg0_4; imm8 [ imm = imm8 * 4; ] {
+    local rs1:4 = zext(op4_4:1);
+    local rs2:4 = zext(op0_4:1);
+
+    local n_regs = reg0_4 - reg4_4 + 1;
+    SP = SP + (imm - n_regs * 4);
+
+    ## pop stack to registers
+    #local start_reg_ptr:2 = &reg4_4;
+    #
+    #<startloop>
+    #if (n_regs == 0) goto <endloop>;
+    #    pop32(tmp);
+    #    *[register]:4 start_reg_ptr = tmp;
+    #    start_reg_ptr = start_reg_ptr + 4;
+    #    n_regs = n_regs - 1;
+    #    goto <startloop>;
+    #<endloop>
+
+    if (rs1 == 1) goto <p1>;
+    if (rs1 == 2) goto <p2>;
+    if (rs1 == 3) goto <p3>;
+    if (rs1 == 4) goto <p4>;
+    if (rs1 == 5) goto <p5>;
+    if (rs1 == 6) goto <p6>;
+    if (rs1 == 7) goto <p7>;
+    if (rs1 == 8) goto <p8>;
+    if (rs1 == 9) goto <p9>;
+    if (rs1 == 10) goto <p10>;
+    if (rs1 == 11) goto <p11>;
+    if (rs1 == 12) goto <p12>;
+    if (rs1 == 13) goto <p13>;
+    if (rs1 == 14) goto <p14>;
+    if (rs1 == 15) goto <p15>;
+
+    <p1>
+    pop32(R1);
+    if (rs2 == 1) goto <end>;
+    <p2>
+    pop32(R2);
+    if (rs2 == 2) goto <end>;
+    <p3>
+    pop32(R3);
+    if (rs2 == 3) goto <end>;
+    <p4>
+    pop32(R4);
+    if (rs2 == 4) goto <end>;
+    <p5>
+    pop32(R5);
+    if (rs2 == 5) goto <end>;
+    <p6>
+    pop32(R6);
+    if (rs2 == 6) goto <end>;
+    <p7>
+    pop32(R7);
+    if (rs2 == 7) goto <end>;
+    <p8>
+    pop32(R8);
+    if (rs2 == 8) goto <end>;
+    <p9>
+    pop32(R9);
+    if (rs2 == 9) goto <end>;
+    <p10>
+    pop32(R10);
+    if (rs2 == 10) goto <end>;
+    <p11>
+    pop32(R11);
+    if (rs2 == 11) goto <end>;
+    <p12>
+    pop32(R12);
+    if (rs2 == 12) goto <end>;
+    <p13>
+    pop32(R13);
+    if (rs2 == 13) goto <end>;
+    <p14>
+    pop32(R14);
+    if (rs2 == 14) goto <end>;
+    <p15>
+    pop32(R15);
+
+    <end>
+    pop32(PC);
+    return [PC];
+}
+
+
+## SAT - saturation of signed 32-bit data
+:SAT reg0_4    is op0_8 = 0x7E; op4_4 = 0x3 & reg0_4 {
+    if ($(O_flag) == 0) goto <finish>;
+    reg0_4 = 0x80000000;
+    if ($(S_flag) == 0) goto <finish>;
+    reg0_4 = 0x7FFFFFFF;
+    <finish>
+}
+
+
+## SATR - saturation of signed 64-bit data for RMPA
+:SATR    is op0_8 = 0x7F; op0_8 = 0x93 unimpl
+
+
+## SBB - subtraction with borrow
+### (1) SBB Rs, Rd
+:SBB reg4_4, reg0_4    is op0_8 = 0xFC; op0_8 = 0x03; reg4_4 & reg0_4 {
+    local tmp:4 = reg4_4 - zext(($(C_flag) == 0));
+    setSubtractFlags(reg0_4, tmp);
+    setSubtractOverflowFlags(reg0_4, tmp);
+    reg0_4 = reg0_4 - tmp;
+    setResultFlags(reg0_4);
+}
+
+
+### (2) SBB dsp[Rs], Rd
+:SBB ld_src, reg0_4    is op0_8 = 0x06; op2_6 = 0b101000 & ld0_2 < 3 & ld0_2; op0_8 = 0x00; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 0x2; ] {
+    local tmp:4 = ld_src - zext(($(C_flag) == 0));
+    setSubtractFlags(reg0_4, tmp);
+    setSubtractOverflowFlags(reg0_4, tmp);
+    reg0_4 = reg0_4 - tmp;
+    setResultFlags(reg0_4);
+}
+
+
+## SCCnd - condition setting
+### (1.1) SCCnd.L Rd
+:SC^COND^szdsc szld_dst    is szdsc & op0_8 = 0xFC; op4_4 = 0xD & sz2_2 = 0b10 & sz2_2 & ld0_2 = 0b11 & ld0_2; (op0_4 & COND & cc) ... & szld_dst [ mode_ld = ld0_2; mode_sz = sz2_2; cc_val = op0_4; ] {
+    *:4 szld_dst = zext(cc);
+}
+
+### (1.2) SCCnd.B/W/L dsp[Rd]
+:SC^COND^szdsc szld_dst    is szdsc & op0_8 = 0xFC; op4_4 = 0xD & sz2_2 = 0b00 & sz2_2 & ld0_2 != 0b11 & ld0_2; (op0_4 & COND & cc) ... & szld_dst [ mode_ld = ld0_2; mode_sz = sz2_2; cc_val = op0_4; ] {
+    *:1 szld_dst = cc;
+}
+:SC^COND^szdsc szld_dst    is szdsc & op0_8 = 0xFC; op4_4 = 0xD & sz2_2 = 0b01 & sz2_2 & ld0_2 != 0b11 & ld0_2; (op0_4 & COND & cc) ... & szld_dst [ mode_ld = ld0_2; mode_sz = sz2_2; cc_val = op0_4; ] {
+    *:2 szld_dst = zext(cc);
+}
+:SC^COND^szdsc szld_dst    is szdsc & op0_8 = 0xFC; op4_4 = 0xD & sz2_2 = 0b10 & sz2_2 & ld0_2 != 0b11 & ld0_2; (op0_4 & COND & cc) ... & szld_dst [ mode_ld = ld0_2; mode_sz = sz2_2; cc_val = op0_4; ] {
+    *:4 szld_dst = zext(cc);
+}
+
+
+## SCMPU - string compare until not equal
+:SCMPU    is op0_8 = 0x7F; op0_8 = 0x83 {
+    local check_len:1;
+    local tmp0:1;
+    local tmp1:1;
+
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <endloop>;
+        tmp0 = *:1 R1;
+        tmp1 = *:1 R2;
+        R1 = R1 + 1;
+        R2 = R2 + 1;
+        R3 = R3 - 1;
+        if (tmp0 == 0) goto <compare>;
+        if (tmp0 != tmp1) goto <compare>;
+    goto <loop>;
+
+    <endloop>
+    $(Z_flag) = 1:1;
+    $(C_flag) = 1:1;
+    goto <end>;
+
+    <compare>
+    local tmp2 = tmp0 - tmp1;
+    $(C_flag) = (tmp2 s>= 0);
+    $(Z_flag) = 0;
+
+    <end>
+}
+
+
+## SETPSW - set flag in PSW
+:SETPSW^" C" is op0_8 = 0x7F; op0_8 = 0xA0 { $(C_flag) = 1; }
+:SETPSW^" Z" is op0_8 = 0x7F; op0_8 = 0xA1 { $(Z_flag) = 1; }
+:SETPSW^" S" is op0_8 = 0x7F; op0_8 = 0xA2 { $(S_flag) = 1; }
+:SETPSW^" O" is op0_8 = 0x7F; op0_8 = 0xA3 { $(O_flag) = 1; }
+:SETPSW^" I" is op0_8 = 0x7F; op0_8 = 0xA8 { $(I_flag) = 1; }
+:SETPSW^" U" is op0_8 = 0x7F; op0_8 = 0xA9 { $(U_flag) = 1; }
+
+
+## SHAR - arithmetic shift to the right p. 186
+### (1) SHAR #IMM:5, Rd
+:SHAR "#"^imm, reg0_4    is op1_7 = 0b110101 & op0_1; op4_4 & reg0_4 [ imm = (op0_1 << 4) + op4_4; ] {
+    local shift = zext(imm:1);
+    local original = reg0_4;
+    local carrybit = (original >> (shift - 1)) & 1;
+    reg0_4 = original s>> shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+    $(O_flag) = 0;
+}
+
+### (2) SHAR Rs, Rd
+:SHAR reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x61; reg4_4 & reg0_4 {
+    local shift = reg4_4 & 31;
+    local original = reg0_4;
+    local carrybit = (original >> (shift - 1)) & 1;
+    reg0_4 = original s>> shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+    $(O_flag) = 0;
+}
+
+### (3) SHAR #IMM:5, Rs, Rd
+:SHAR "#"^uimm0_5, reg4_4, reg0_4    is op0_8 = 0xFD; op5_3 = 0b101 & uimm0_5; reg4_4 & reg0_4 {
+    local shift = zext(uimm0_5:1);
+    local original = reg4_4;
+    local carrybit = (original >> (shift - 1)) & 1;
+    reg0_4 = original s>> shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg4_4);
+    $(O_flag) = 0;
+}
+
+
+## SHLL - logical and arithmetic shift to the left p. 187
+### (1) SHLL #IMM:5, Rd
+:SHLL "#"^imm, reg0_4    is op1_7 = 0b110110 & op0_1; op4_4 & reg0_4 [ imm = (op0_1 << 4) + op4_4; ] {
+    local shift = imm:1;
+    local original = reg0_4;
+    local carrybit = (original >> (32 - shift)) & 1;
+    reg0_4 = original << shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+
+    # O flag is cleared if shift does not change sign (i.e. shifted out bits and result MSB are all the same)
+    # "when scr [sic] is 0, this flag is also cleared" - Assuming this is a typo of src
+    if (shift == 0) goto <unseto>;
+    local tmp:4 = original >> (32 - shift - 1);
+    if (tmp == 0) goto <unseto>;
+    if (tmp == ((1 << shift) - 1)) goto <unseto>;
+    goto <seto>;
+
+    <unseto>
+    $(O_flag) = 0;
+    goto <end>;
+    <seto>
+    $(O_flag) = 1;
+    <end>
+}
+
+### (2) SHLL Rs, Rd
+:SHLL reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x62; reg4_4 & reg0_4 {
+    local shift = reg4_4 & 31;
+    local original = reg0_4;
+    local carrybit = (original >> (32 - shift)) & 1;
+    reg0_4 = original << shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+
+    # "when scr [sic] is 0, this flag is also cleared" - Assuming this is a typo of src
+    if (shift == 0) goto <unseto>;
+    local tmp:4 = original >> (32 - shift - 1);
+    if (tmp == 0) goto <unseto>;
+    if (tmp == ((1 << shift) - 1)) goto <unseto>;
+    goto <seto>;
+
+    <unseto>
+    $(O_flag) = 0;
+    goto <end>;
+    <seto>
+    $(O_flag) = 1;
+    <end>
+}
+
+### (3) SHLL #IMM:5, Rs, Rd
+:SHLL "#"^uimm0_5, reg4_4, reg0_4    is op0_8 = 0xFD; op5_3 = 0b110 & uimm0_5; reg4_4 & reg0_4 {
+    local shift = uimm0_5:1;
+    local original = reg4_4;
+    local carrybit = (original >> (32 - shift)) & 1;
+    reg0_4 = original << shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+
+    # "when scr [sic] is 0, this flag is also cleared" - Assuming this is a typo of src
+    if (shift == 0) goto <unseto>;
+    local tmp:4 = original >> (32 - shift - 1);
+    if (tmp == 0) goto <unseto>;
+    if (tmp == ((1 << shift) - 1)) goto <unseto>;
+    goto <seto>;
+
+    <unseto>
+    $(O_flag) = 0;
+    goto <end>;
+    <seto>
+    $(O_flag) = 1;
+    <end>
+}
+
+
+## SHLR - logical shift to the right p. 188
+### (1) SHLR #IMM:5, Rd
+:SHLR "#"^imm, reg0_4    is op1_7 = 0b110100 & op0_1; op4_4 & reg0_4 [ imm = (op0_1 << 4) + op4_4; ] {
+    local shift = zext(imm:1);
+    local original = reg0_4;
+    local carrybit = (original >> (shift - 1)) & 1;
+    reg0_4 = original >> shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+}
+
+### (2) SHLR Rs, Rd
+:SHLR reg4_4, reg0_4    is op0_8 = 0xFD; op0_8 = 0x60; reg4_4 & reg0_4 {
+    local shift = reg4_4 & 31;
+    local original = reg0_4;
+    local carrybit = (original >> (shift - 1)) & 1;
+    reg0_4 = original >> shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+}
+
+### (3) SHLR #IMM:5, Rs, Rd
+:SHLR "#"^uimm0_5, reg4_4, reg0_4    is op0_8 = 0xFD; op5_3 = 0b100 & uimm0_5; reg4_4 & reg0_4 {
+    local shift = zext(uimm0_5:1);
+    local original = reg4_4;
+    local carrybit = (original >> (shift - 1)) & 1;
+    reg0_4 = original >> shift;
+    $(C_flag) = carrybit:1;
+    setResultFlags(reg0_4);
+}
+
+
+## SMOVB - string move backward p. 189
+:SMOVB    is op0_8 = 0x7F; op0_8 = 0x8B {
+    local check_len:1;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        *:1 R1 = *:1 R2;
+        R1 = R1 - 1;
+        R2 = R2 - 1;
+        R3 = R3 - 1;
+        goto <loop>;
+    <end>
+}
+
+
+## SMOVF - string move forward
+:SMOVF    is op0_8 = 0x7F; op0_8 = 0x8F {
+    local check_len:1;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        *:1 R1 = *:1 R2;
+        R1 = R1 + 1;
+        R2 = R2 + 1;
+        R3 = R3 - 1;
+        goto <loop>;
+    <end>
+}
+
+
+## SMOVU - string move while unequal to zero p. 191
+:SMOVU    is op0_8 = 0x7F; op0_8 = 0x87 {
+    local tmp:1;
+    local check_len:1;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        tmp = *:1 R2;
+        R2 = R2 + 1;
+        *:1 R1 = tmp;
+        R1 = R1 + 1;
+        R3 = R3 - 1;
+        if (tmp == 0) goto <end>;
+    goto <loop>;
+    <end>
+}
+
+
+## SSTR.size - storing a string p. 192
+### SSTR.B
+:SSTR^szdsc    is szdsc & op0_8 = 0x7F; op2_6 = 0b100010 & sz0_2 = 0 & sz0_2 [ mode_sz = sz0_2; ] {
+    local check_len;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        *:1 R1 = R2;
+        R1 = R1 + 1;
+        R3 = R3 - 1;
+    goto <loop>;
+    <end>
+}
+
+### SSTR.W
+:SSTR^szdsc    is szdsc & op0_8 = 0x7F; op2_6 = 0b100010 & sz0_2 = 1 & sz0_2 [ mode_sz = sz0_2; ] {
+    local check_len;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        *:2 R1 = R2;
+        R1 = R1 + 2;
+        R3 = R3 - 1;
+    goto <loop>;
+    <end>
+}
+
+### SSTR.L
+:SSTR^szdsc    is szdsc & op0_8 = 0x7F; op2_6 = 0b100010 & sz0_2 = 2 & sz0_2 [ mode_sz = sz0_2; ] {
+    local check_len;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        *:4 R1 = R2;
+        R1 = R1 + 4;
+        R3 = R3 - 1;
+    goto <loop>;
+    <end>
+}
+
+
+## STNZ - store on not zero p. 193
+### (1) STNZ #SIMM, Rd
+:STNZ liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0x0; op4_4 = 0xF & reg0_4; liop [ mode_li = li2_2; ] {
+    if ($(Z_flag) == 1) goto inst_next;
+    reg0_4 = liop;
+}
+
+### (2) STNZ Rs, Rd
+:STNZ reg4_4, reg0_4    is op0_8 = 0xFC; op0_8 = 0x4B; reg4_4 & reg0_4 {
+    if ($(Z_flag) == 1) goto inst_next;
+    reg0_4 = reg4_4;
+}
+
+
+## STZ - store on zero
+### (1) STZ #SIMM, Rd
+:STZ liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0x0; op4_4 = 0xE & reg0_4; liop [ mode_li = li2_2; ] {
+    if ($(Z_flag) == 0) goto inst_next;
+    reg0_4 = liop;
+}
+
+# TODO: This has the same encoding as STNZ 2 in the manual!
+### (2) STZ Rs, Rd
+#:STZ reg4_4, reg0_4    is op0_8 = 0xFC; op0_8 = 0x4B; reg4_4 & reg0_4 {
+#    if ($(Z_flag) == 0) goto inst_next;
+#    reg0_4 = reg4_4;
+#}
+
+
+## SUB - subtraction without borrow p. 195
+### (1) SUB #UIMM:4, Rd
+:SUB "#"^uimm4_4, reg0_4    is op0_8 = 0x60; uimm4_4 & reg0_4 {
+    setSubtractOverflowFlags(reg0_4, uimm4_4);
+    setSubtractFlags(reg0_4, uimm4_4);
+    reg0_4 = reg0_4 - zext(uimm4_4:1);
+    setResultFlags(reg0_4);
+}
+
+### (2) SUB dsp[Rs].memex, Rd
+### when memex == UB or src == Rs
+:SUB ld_src, reg0_4    is op2_6 = 0b10000 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    setSubtractOverflowFlags(reg0_4, ld_src);
+    setSubtractFlags(reg0_4, ld_src);
+    reg0_4 = reg0_4 - ld_src;
+    setResultFlags(reg0_4);
+}
+
+### when memex != UB
+:SUB ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0x0 & ld0_2 != 0b11 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    setSubtractOverflowFlags(reg0_4, ld_src);
+    setSubtractFlags(reg0_4, ld_src);
+    reg0_4 = reg0_4 - ld_src;
+    setResultFlags(reg0_4);
+}
+
+### (3) SUB Rs, Rs2, Rd
+:SUB rs1_4_4, rs2_0_4, rd0_4    is op0_8 = 0xFF; op4_4 = 0x0 & rd0_4; rs1_4_4 & rs2_0_4 {
+    setSubtractOverflowFlags(rs2_0_4, rs1_4_4);
+    setSubtractFlags(rs2_0_4, rs1_4_4);
+    rd0_4 = rs2_0_4 - rs1_4_4;
+    setResultFlags(rd0_4);
+}
+
+
+## SUNTIL.size - search until equal string p. 196
+### SUNTIL.B
+:SUNTIL^szdsc    is szdsc & op0_8 = 0x7F; op2_6 = 0b100000 & sz0_2 = 0 & sz0_2 [ mode_sz = sz0_2; ] {
+    local tmp:4;
+    local check_len:1;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        tmp = zext(*:1 R1);
+        R1 = R1 + 1;
+        R3 = R3 - 1;
+        if (tmp == R2) goto <end>;
+    goto <loop>;
+    <end>
+}
+
+### SUNTIL.W
+:SUNTIL^szdsc    is szdsc & op0_8 = 0x7F; op2_6 = 0b100000 & sz0_2 = 1 & sz0_2 [ mode_sz = sz0_2; ] {
+    local tmp:4;
+    local check_len:1;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        tmp = zext(*:2 R1);
+        R1 = R1 + 2;
+        R3 = R3 - 1;
+        if (tmp == R2) goto <end>;
+    goto <loop>;
+    <end>
+}
+
+### SUNTIL.L
+:SUNTIL^szdsc    is szdsc & op0_8 = 0x7F; op2_6 = 0b100000 & sz0_2 = 2 & sz0_2 [ mode_sz = sz0_2; ] {
+    local tmp:4;
+    local check_len:1;
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <end>;
+        tmp = *:4 R1;
+        R1 = R1 + 4;
+        R3 = R3 - 1;
+        if (tmp == R2) goto <end>;
+    goto <loop>;
+    <end>
+}
+
+
+## SWHILE - search while unequal string p. 198
+:SWHILE^".B"    is op0_8 = 0x7F; op2_6 = 0b100001 & sz0_2 = 0 {
+    local check_len:1;
+    local tmp:4;
+
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <endloop>;
+        tmp = zext(*:1 R1);
+        R1 = R1 + 1;
+        R3 = R3 - 1;
+        if (R1 != R2) goto <unmatch>;
+    goto <loop>;
+
+    <endloop>
+    $(Z_flag) = 1;
+    $(C_flag) = 1;
+    goto <end>;
+
+    <unmatch>
+    $(Z_flag) = 0;
+    $(C_flag) = ((tmp - R2) s>= 0);
+
+    <end>
+}
+
+:SWHILE^".W"    is op0_8 = 0x7F; op2_6 = 0b100001 & sz0_2 = 1 {
+    local check_len:1;
+    local tmp:4;
+
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <endloop>;
+        tmp = zext(*:2 R1);
+        R1 = R1 + 1;
+        R3 = R3 - 1;
+        if (R1 != R2) goto <unmatch>;
+    goto <loop>;
+
+    <endloop>
+    $(Z_flag) = 1;
+    $(C_flag) = 1;
+    goto <end>;
+
+    <unmatch>
+    $(Z_flag) = 0;
+    $(C_flag) = ((tmp - R2) s>= 0);
+
+    <end>
+}
+
+:SWHILE^".L"    is op0_8 = 0x7F; op2_6 = 0b100001 & sz0_2 = 2 {
+    local check_len:1;
+    local tmp:4;
+
+    <loop>
+    check_len = (R3 == 0);
+    if (check_len) goto <endloop>;
+        tmp = *:4 R1;
+        R1 = R1 + 1;
+        R3 = R3 - 1;
+        if (R1 != R2) goto <unmatch>;
+    goto <loop>;
+
+    <endloop>
+    $(Z_flag) = 1;
+    $(C_flag) = 1;
+    goto <end>;
+
+    <unmatch>
+    $(Z_flag) = 0;
+    $(C_flag) = ((tmp - R2) s>= 0);
+
+    <end>
+}
+
+
+## TST - logical test
+### (1) TST #SIMM, Rs
+:TST liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0x0; op4_4 = 0xC & reg0_4; liop [ mode_li = li2_2; ] {
+    local tmp = liop & reg0_4;
+    setResultFlags(tmp);
+}
+
+### (2) TST dsp[Rs].memex, Rs2
+### when memex = UB or src == Rs
+:TST ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b1100 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    local tmp = ld_src & reg0_4;
+    setResultFlags(tmp);
+}
+
+### when memex != UB
+:TST ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0x8 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x0C; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    local tmp = ld_src & reg0_4;
+    setResultFlags(tmp);
+}
+
+
+### UTOF - integer to float p. 201
+### when memex == UB or src == Rs
+:UTOF ldu_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b10101 & ld0_2; reg0_4 ... & ldu_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    # TODO: FPSW
+    reg0_4 = int2float(ldu_src);
+    setFloatResultFlags(reg0_4);
+}
+
+### when memex != UB
+:UTOF ldu_src, reg0_4    is op0_8 = 0x6; mi6_2 & op2_4 = 0x8 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x15; reg0_4 ... & ldu_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    # TODO: FPSW
+    reg0_4 = int2float(ldu_src);
+    setFloatResultFlags(reg0_4);
+}
+
+
+## WAIT - stop execution until interrupt/reset p. 203
+:WAIT is op0_8 = 0x7F; op0_8 = 0x96 {
+    $(I_flag) = 1;
+    # TODO: save PC of next instruction?
+}
+
+
+## XCHG - exchange values p. 204
+### when memex == UB or src == Rs
+#### XCHG Rs, Rd
+:XCHG reg4_4, reg0_4    is op0_8 = 0xFC; op2_6 = 0b10000 & ld0_2 = 0b11; reg4_4 & reg0_4 {
+    local tmp:4 = reg4_4;
+    reg4_4 = reg0_4;
+    reg0_4 = tmp;
+}
+
+#### XCHG dsp[Rs].UB, Rd
+:XCHG ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b10000 & ld0_2 < 0b11 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] unimpl
+
+### when memex != UB
+:XCHG ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0x8 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x10; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] unimpl
+
+
+## XOR p .301
+### (1) XOR #SIMM, Rd
+:XOR liop, reg0_4    is op0_8 = 0xFD; op4_4 = 0x7 & li2_2 & op0_2 = 0x0; op4_4 = 0xD & reg0_4; liop [ mode_li = li2_2; ] {
+    build liop;
+    reg0_4 = reg0_4 ^ liop;
+    setResultFlags(reg0_4);
+}
+
+### (2) XOR dsp[Rs].memex, Rd
+### when memex == UB or src == Rs
+:XOR ld_src, reg0_4    is op0_8 = 0xFC; op2_6 = 0b1101 & ld0_2; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = 4; ] {
+    build ld_src;
+    reg0_4 = reg0_4 ^ ld_src;
+    setResultFlags(reg0_4);
+}
+
+### when memex != UB
+:XOR ld_src, reg0_4    is op0_8 = 0x06; mi6_2 & op2_4 = 0b1000 & ld0_2 != 0b11 & ld0_2; op0_8 = 0x0D; reg0_4 ... & ld_src [ mode_ld = ld0_2; mode_mi = mi6_2; ] {
+    build ld_src;
+    reg0_4 = reg0_4 ^ ld_src;
+    setResultFlags(reg0_4);
+}

@@ -1,0 +1,89 @@
+# sleigh specification file for RX62T Processor
+
+define endian=little;
+define alignment=1;
+
+define space ram type=ram_space size=4 default;  # catch all
+
+#define space rom     type=ram_space      size=3;  # ROM space
+#define space ram     type=ram_space      size=2  default;
+#define space data_flash type=ram_space   size=2;
+
+#define space fcu_rom type=ram_space      size=2;  # ROM space
+#define space fcu_ram type=ram_space      size=2;
+
+#define space io      type=ram_space      size=2;
+#define space io2     type=ram_space      size=2;
+#define space io3     type=ram_space      size=2;
+
+# Registers
+define space register type=register_space size=2;
+
+define register offset=0x00 size=4
+        [
+                SP R1  R2  R3  R4  R5  R6  R7
+                R8 R9 R10 R11 R12 R13 R14 R15
+                ISP USP INTB PC PSW BPC BPSW FINTV FPSW
+                EXTB
+        ];
+define register offset=0x100 size=4 [ contextreg LIREG ];
+
+## R0 = SP. Can be interrupt SP (ISP) or user SP (USP) based on stack pointer select bit in PSW.
+#define register offset=0x00 size=4 SP;
+
+define register offset=0x64 size=8 ACC;
+#define register offset=0x64 size=8 [ A0 A1 ]; # No A1 in RX62T, but other RXv2 may have it
+
+# Bit range registers
+## Processor Status Word (PSW / BPSW)
+# XML generation of bit ranges is currently broken
+#define bitrange C_flag=PSW[0,1]
+#                Z_flag=PSW[1,1]
+#                S_flag=PSW[2,1]
+#                O_flag=PSW[3,1]
+#                I_flag=PSW[16,1]
+#                U_flag=PSW[17,1]
+#                PM=PSW[20,1]
+#                IPL=PSW[24,4];
+@define C_flag "PSW[0,1]"
+@define Z_flag "PSW[1,1]"
+@define S_flag "PSW[2,1]"
+@define O_flag "PSW[3,1]"
+@define I_flag "PSW[16,1]"
+@define U_flag "PSW[17,1]"
+@define PM "PSW[20,1]"
+@define IPL "PSW[24,4]"
+
+## Floating-Point Status Word (FPSW)
+@define FS_flag "FPSW[31,1]"
+@define FX_flag "FPSW[30,1]"
+@define FU_flag "FPSW[29,1]"
+@define FZ_flag "FPSW[28,1]"
+@define FO_flag "FPSW[27,1]"
+@define FV_flag "FPSW[26,1]"
+@define EX_flag "FPSW[14,1]"
+@define EU_flag "FPSW[13,1]"
+@define EZ_flag "FPSW[12,1]"
+@define EO_flag "FPSW[11,1]"
+@define EV_flag "FPSW[10,1]"
+@define DN_flag "FPSW[8,1]"
+@define CE_flag "FPSW[7,1]"
+@define CX_flag "FPSW[6,1]"
+@define CU_flag "FPSW[5,1]"
+@define CZ_flag "FPSW[4,1]"
+@define CO_flag "FPSW[3,1]"
+@define CV_flag "FPSW[2,1]"
+@define RM "FPSW[0,2]"
+
+## Extra register for special LI flag
+@define LI_flag "LIREG[0,1]"
+
+# Rouding modes for floating point operations:
+# 0b00: round to nearest value
+# 0b01: round to 0
+# 0b10: round towards +infinity
+# 0b11: round towards -infinity
+
+
+# Include contents of .sinc file
+@include "rx62t.sinc"
