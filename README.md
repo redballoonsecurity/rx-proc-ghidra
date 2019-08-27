@@ -8,3 +8,7 @@ most of the instructions supported by the RX62T processor.
 ## Installation
 
 `unzip ghidra_9.0.2_PUBLIC_20190626_RX62T.zip -d ${ghidra_install_dir}/Ghidra/Extensions`
+
+## Building
+
+`gradle -PGHIDRA_INSTALL_DIR=<ghidra_install_dir>`
