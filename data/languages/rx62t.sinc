@@ -402,6 +402,71 @@ nextreg: reg is reg0_4 = 12 [ reg = R13; ] { export R13; }
 nextreg: reg is reg0_4 = 13 [ reg = R14; ] { export R14; }
 nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
 
+# Push and pop operations
+pushr1: is op4_4 <= 1 & op0_4 >= 1 { push32(R1); }
+pushr1: is op4_4 & op0_4 { }
+pushr2: is op4_4 <= 2 & op0_4 >= 2 { push32(R2); }
+pushr2: is op4_4 & op0_4 { }
+pushr3: is op4_4 <= 3 & op0_4 >= 3 { push32(R3); }
+pushr3: is op4_4 & op0_4 { }
+pushr4: is op4_4 <= 4 & op0_4 >= 4 { push32(R4); }
+pushr4: is op4_4 & op0_4 { }
+pushr5: is op4_4 <= 5 & op0_4 >= 5 { push32(R5); }
+pushr5: is op4_4 & op0_4 { }
+pushr6: is op4_4 <= 6 & op0_4 >= 6 { push32(R6); }
+pushr6: is op4_4 & op0_4 { }
+pushr7: is op4_4 <= 7 & op0_4 >= 7 { push32(R7); }
+pushr7: is op4_4 & op0_4 { }
+pushr8: is op4_4 <= 8 & op0_4 >= 8 { push32(R8); }
+pushr8: is op4_4 & op0_4 { }
+pushr9: is op4_4 <= 9 & op0_4 >= 9 { push32(R9); }
+pushr9: is op4_4 & op0_4 { }
+pushr10: is op4_4 <= 10 & op0_4 >= 10 { push32(R10); }
+pushr10: is op4_4 & op0_4 { }
+pushr11: is op4_4 <= 11 & op0_4 >= 11 { push32(R11); }
+pushr11: is op4_4 & op0_4 { }
+pushr12: is op4_4 <= 12 & op0_4 >= 12 { push32(R12); }
+pushr12: is op4_4 & op0_4 { }
+pushr13: is op4_4 <= 13 & op0_4 >= 13 { push32(R13); }
+pushr13: is op4_4 & op0_4 { }
+pushr14: is op4_4 <= 14 & op0_4 >= 14 { push32(R14); }
+pushr14: is op4_4 & op0_4 { }
+pushr15: is op4_4 <= 15 & op0_4 >= 15 { push32(R15); }
+pushr15: is op4_4 & op0_4 { }
+pushregs: is pushr1 & pushr2 & pushr3 & pushr4 & pushr5 & pushr6 & pushr7 & pushr8 & pushr9 & pushr10 & pushr11 & pushr12 & pushr13 & pushr14 & pushr15 { }
+
+popr1: is op4_4 <= 1 & op0_4 >= 1 { pop32(R1); }
+popr1: is op4_4 & op0_4 { }
+popr2: is op4_4 <= 2 & op0_4 >= 2 { pop32(R2); }
+popr2: is op4_4 & op0_4 { }
+popr3: is op4_4 <= 3 & op0_4 >= 3 { pop32(R3); }
+popr3: is op4_4 & op0_4 { }
+popr4: is op4_4 <= 4 & op0_4 >= 4 { pop32(R4); }
+popr4: is op4_4 & op0_4 { }
+popr5: is op4_4 <= 5 & op0_4 >= 5 { pop32(R5); }
+popr5: is op4_4 & op0_4 { }
+popr6: is op4_4 <= 6 & op0_4 >= 6 { pop32(R6); }
+popr6: is op4_4 & op0_4 { }
+popr7: is op4_4 <= 7 & op0_4 >= 7 { pop32(R7); }
+popr7: is op4_4 & op0_4 { }
+popr8: is op4_4 <= 8 & op0_4 >= 8 { pop32(R8); }
+popr8: is op4_4 & op0_4 { }
+popr9: is op4_4 <= 9 & op0_4 >= 9 { pop32(R9); }
+popr9: is op4_4 & op0_4 { }
+popr10: is op4_4 <= 10 & op0_4 >= 10 { pop32(R10); }
+popr10: is op4_4 & op0_4 { }
+popr11: is op4_4 <= 11 & op0_4 >= 11 { pop32(R11); }
+popr11: is op4_4 & op0_4 { }
+popr12: is op4_4 <= 12 & op0_4 >= 12 { pop32(R12); }
+popr12: is op4_4 & op0_4 { }
+popr13: is op4_4 <= 13 & op0_4 >= 13 { pop32(R13); }
+popr13: is op4_4 & op0_4 { }
+popr14: is op4_4 <= 14 & op0_4 >= 14 { pop32(R14); }
+popr14: is op4_4 & op0_4 { }
+popr15: is op4_4 <= 15 & op0_4 >= 15 { pop32(R15); }
+popr15: is op4_4 & op0_4 { }
+popregs: is popr15 & popr14 & popr13 & popr12 & popr11 & popr10 & popr9 & popr8 & popr7 & popr6 & popr5 & popr4 & popr3 & popr2 & popr1 { }
+
 ################################################################
 
 # ABS - absolute value
@@ -1103,7 +1168,7 @@ nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
 
 # JMP
 :JMP reg0_4    is op0_8 = 0x7F; op4_4 = 0x0 & reg0_4 {
-	PC = reg0_4;
+	call [reg0_4];
 }
 
 
@@ -1111,7 +1176,7 @@ nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
 :JSR reg0_4    is op0_8 = 0x7F; op4_4 = 0x1 & reg0_4 {
 	local tmp:4 = inst_next;
 	push32(tmp);
-	PC = reg0_4;
+	call [reg0_4];
 }
 
 
@@ -1510,71 +1575,7 @@ nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
 
 
 ## POPM - pop multiple p. 151
-:POPM reg4_4^"-"^reg0_4    is op0_8 = 0x6F; op4_4 > 0 & op0_4 > op4_4 & op4_4 & op0_4 & reg4_4 & reg0_4 {
-    local rs1:4 = zext(op4_4:1);
-    local rs2:4 = zext(op0_4:1);
-
-    ### don't look at this
-    if (rs1 == 1) goto <p1>;
-    if (rs1 == 2) goto <p2>;
-    if (rs1 == 3) goto <p3>;
-    if (rs1 == 4) goto <p4>;
-    if (rs1 == 5) goto <p5>;
-    if (rs1 == 6) goto <p6>;
-    if (rs1 == 7) goto <p7>;
-    if (rs1 == 8) goto <p8>;
-    if (rs1 == 9) goto <p9>;
-    if (rs1 == 10) goto <p10>;
-    if (rs1 == 11) goto <p11>;
-    if (rs1 == 12) goto <p12>;
-    if (rs1 == 13) goto <p13>;
-    if (rs1 == 14) goto <p14>;
-    if (rs1 == 15) goto <p15>;
-    <p1>
-    pop32(R1);
-    <p2>
-    pop32(R2);
-    if (rs2 == 2) goto <end>;
-    <p3>
-    pop32(R3);
-    if (rs2 == 3) goto <end>;
-    <p4>
-    pop32(R4);
-    if (rs2 == 4) goto <end>;
-    <p5>
-    pop32(R5);
-    if (rs2 == 5) goto <end>;
-    <p6>
-    pop32(R6);
-    if (rs2 == 6) goto <end>;
-    <p7>
-    pop32(R7);
-    if (rs2 == 7) goto <end>;
-    <p8>
-    pop32(R8);
-    if (rs2 == 8) goto <end>;
-    <p9>
-    pop32(R9);
-    if (rs2 == 9) goto <end>;
-    <p10>
-    pop32(R10);
-    if (rs2 == 10) goto <end>;
-    <p11>
-    pop32(R11);
-    if (rs2 == 11) goto <end>;
-    <p12>
-    pop32(R12);
-    if (rs2 == 12) goto <end>;
-    <p13>
-    pop32(R13);
-    if (rs2 == 13) goto <end>;
-    <p14>
-    pop32(R14);
-    if (rs2 == 14) goto <end>;
-    <p15>
-    pop32(R15);
-    <end>
-}
+:POPM reg4_4^"-"^reg0_4    is op0_8 = 0x6F; op4_4 > 0 & op0_4 > op4_4 & op4_4 & op0_4 & reg4_4 & reg0_4 & popregs { }
 
 
 ## PUSH
@@ -1596,71 +1597,7 @@ nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
 
 
 ## PUSHM - save multiple registers p. 154
-:PUSHM reg4_4^"-"^reg0_4    is op0_8 = 0x6E; op4_4 > 0 & op4_4 < op0_4 & op4_4 & op0_4 & reg4_4 & reg0_4 {
-    local rs1:4 = zext(op4_4:1);
-    local rs2:4 = zext(op0_4:1);
-
-    ### don't look here either
-    if (rs2 == 15) goto <p15>;
-    if (rs2 == 14) goto <p14>;
-    if (rs2 == 13) goto <p13>;
-    if (rs2 == 12) goto <p12>;
-    if (rs2 == 11) goto <p11>;
-    if (rs2 == 10) goto <p10>;
-    if (rs2 == 9) goto <p9>;
-    if (rs2 == 8) goto <p8>;
-    if (rs2 == 7) goto <p7>;
-    if (rs2 == 6) goto <p6>;
-    if (rs2 == 5) goto <p5>;
-    if (rs2 == 4) goto <p4>;
-    if (rs2 == 3) goto <p3>;
-    if (rs2 == 2) goto <p2>;
-    if (rs2 == 1) goto <p1>;
-    <p15>
-    push32(R15);
-    <p14>
-    push32(R14);
-    if (rs1 == 14) goto <end>;
-    <p13>
-    push32(R13);
-    if (rs1 == 13) goto <end>;
-    <p12>
-    push32(R12);
-    if (rs1 == 12) goto <end>;
-    <p11>
-    push32(R11);
-    if (rs1 == 11) goto <end>;
-    <p10>
-    push32(R10);
-    if (rs1 == 10) goto <end>;
-    <p9>
-    push32(R9);
-    if (rs1 == 9) goto <end>;
-    <p8>
-    push32(R8);
-    if (rs1 == 8) goto <end>;
-    <p7>
-    push32(R7);
-    if (rs1 == 7) goto <end>;
-    <p6>
-    push32(R6);
-    if (rs1 == 6) goto <end>;
-    <p5>
-    push32(R5);
-    if (rs1 == 5) goto <end>;
-    <p4>
-    push32(R4);
-    if (rs1 == 4) goto <end>;
-    <p3>
-    push32(R3);
-    if (rs1 == 3) goto <end>;
-    <p2>
-    push32(R2);
-    if (rs1 == 2) goto <end>;
-    <p1>
-    push32(R1);
-    <end>
-}
+:PUSHM reg4_4^"-"^reg0_4    is op0_8 = 0x6E; op4_4 > 0 & op4_4 < op0_4 & op4_4 & op0_4 & reg4_4 & reg0_4 & pushregs { }
 
 
 ## RACL
@@ -1803,87 +1740,11 @@ nextreg: reg is reg0_4 = 14 [ reg = R15; ] { export R15; }
 }
 
 ### (2) RTSD src, Rd-Rd2
-:RTSD "#"^imm, reg4_4^"-"^reg0_4    is op0_8 = 0x3F; op4_4 > 0 & op0_4 >= op4_4 & op4_4 & op0_4 & reg4_4 & reg0_4; imm8 [ imm = imm8 * 4; ] {
-    local rs1:4 = zext(op4_4:1);
-    local rs2:4 = zext(op0_4:1);
-
+:RTSD "#"^imm, reg4_4^"-"^reg0_4    is op0_8 = 0x3F; op4_4 > 0 & op0_4 >= op4_4 & op4_4 & op0_4 & reg4_4 & reg0_4 & popregs; imm8 [ imm = imm8 * 4; ] {
     local n_regs = reg0_4 - reg4_4 + 1;
     SP = SP + (imm - n_regs * 4);
 
-    ## pop stack to registers
-    #local start_reg_ptr:2 = &reg4_4;
-    #
-    #<startloop>
-    #if (n_regs == 0) goto <endloop>;
-    #    pop32(tmp);
-    #    *[register]:4 start_reg_ptr = tmp;
-    #    start_reg_ptr = start_reg_ptr + 4;
-    #    n_regs = n_regs - 1;
-    #    goto <startloop>;
-    #<endloop>
-
-    if (rs1 == 1) goto <p1>;
-    if (rs1 == 2) goto <p2>;
-    if (rs1 == 3) goto <p3>;
-    if (rs1 == 4) goto <p4>;
-    if (rs1 == 5) goto <p5>;
-    if (rs1 == 6) goto <p6>;
-    if (rs1 == 7) goto <p7>;
-    if (rs1 == 8) goto <p8>;
-    if (rs1 == 9) goto <p9>;
-    if (rs1 == 10) goto <p10>;
-    if (rs1 == 11) goto <p11>;
-    if (rs1 == 12) goto <p12>;
-    if (rs1 == 13) goto <p13>;
-    if (rs1 == 14) goto <p14>;
-    if (rs1 == 15) goto <p15>;
-
-    <p1>
-    pop32(R1);
-    if (rs2 == 1) goto <end>;
-    <p2>
-    pop32(R2);
-    if (rs2 == 2) goto <end>;
-    <p3>
-    pop32(R3);
-    if (rs2 == 3) goto <end>;
-    <p4>
-    pop32(R4);
-    if (rs2 == 4) goto <end>;
-    <p5>
-    pop32(R5);
-    if (rs2 == 5) goto <end>;
-    <p6>
-    pop32(R6);
-    if (rs2 == 6) goto <end>;
-    <p7>
-    pop32(R7);
-    if (rs2 == 7) goto <end>;
-    <p8>
-    pop32(R8);
-    if (rs2 == 8) goto <end>;
-    <p9>
-    pop32(R9);
-    if (rs2 == 9) goto <end>;
-    <p10>
-    pop32(R10);
-    if (rs2 == 10) goto <end>;
-    <p11>
-    pop32(R11);
-    if (rs2 == 11) goto <end>;
-    <p12>
-    pop32(R12);
-    if (rs2 == 12) goto <end>;
-    <p13>
-    pop32(R13);
-    if (rs2 == 13) goto <end>;
-    <p14>
-    pop32(R14);
-    if (rs2 == 14) goto <end>;
-    <p15>
-    pop32(R15);
-
-    <end>
+    build popregs;
     pop32(PC);
     return [PC];
 }

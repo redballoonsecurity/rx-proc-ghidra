@@ -54,18 +54,6 @@
         <pentry minsize="1" maxsize="4" extension="inttype">
           <register name="R1"/>
         </pentry>
-        <pentry minsize="1" maxsize="4" extension="inttype">
-          <register name="R2"/>
-        </pentry>
-        <pentry minsize="1" maxsize="4" extension="inttype">
-          <register name="R3"/>
-        </pentry>
-        <pentry minsize="1" maxsize="4" extension="inttype">
-          <register name="R4"/>
-        </pentry>
-        <pentry minsize="1" maxsize="4" extension="inttype">
-          <register name="R14"/>
-        </pentry>
       </output>
       <unaffected>
         <register name="SP"/>
@@ -80,6 +68,29 @@
       </unaffected>
     </prototype>
   </default_proto>
+  <prototype name="cdecl" extrapop="unknown" stackshift="4">
+    <input>
+      <pentry minsize="1" maxsize="500" align="4">
+        <addr space="stack" offset="4"/>
+      </pentry>
+    </input>
+    <output>
+      <pentry minsize="1" maxsize="4" extension="inttype">
+        <register name="R1"/>
+      </pentry>
+    </output>
+    <unaffected>
+      <register name="SP"/>
+      <register name="R6"/>
+      <register name="R7"/>
+      <register name="R8"/>
+      <register name="R9"/>
+      <register name="R10"/>
+      <register name="R11"/>
+      <register name="R12"/>
+      <register name="R13"/>
+    </unaffected>
+  </prototype>
   <!--
   <prototype name="__asmAF" extrapop="2" stackshift="2" strategy="register">
       <input>
