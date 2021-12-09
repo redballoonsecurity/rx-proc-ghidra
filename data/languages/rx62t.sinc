@@ -1168,7 +1168,7 @@ popregs: is popr15 & popr14 & popr13 & popr12 & popr11 & popr10 & popr9 & popr8 
 
 # JMP
 :JMP reg0_4    is op0_8 = 0x7F; op4_4 = 0x0 & reg0_4 {
-	PC = reg0_4;
+	call [reg0_4];
 }
 
 
@@ -1176,7 +1176,7 @@ popregs: is popr15 & popr14 & popr13 & popr12 & popr11 & popr10 & popr9 & popr8 
 :JSR reg0_4    is op0_8 = 0x7F; op4_4 = 0x1 & reg0_4 {
 	local tmp:4 = inst_next;
 	push32(tmp);
-	PC = reg0_4;
+	call [reg0_4];
 }
 
 
