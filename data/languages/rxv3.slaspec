@@ -1,0 +1,7 @@
+# sleigh specification file for Renesas RXv3 processors (e.g. RX72N, RX72M, RX66N, RX671).
+#
+# RXv3 is a superset of RXv2: this builds the RXv1/RXv2 language (rx62t.slaspec /
+# rx62t.sinc) and adds the RXv3 instructions and registers from rxv3.sinc.
+
+@define RXV3 "1"
+@include "rx62t.slaspec"

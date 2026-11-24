@@ -1,0 +1,26 @@
+<dwarf>
+	<!--
+		DWARF register numbers for Renesas RX (RXv1/RXv2), as emitted by CC-RX and GCC:
+		0 = R0/SP, 1..15 = R1..R15, 16 = PC (the return address column in the CIEs).
+	-->
+	<register_mappings>
+		<register_mapping dwarf="0" ghidra="SP" stackpointer="true"/>
+		<register_mapping dwarf="1" ghidra="R1" auto_count="15"/> <!-- R1..R15 -->
+		<register_mapping dwarf="16" ghidra="PC"/>
+	</register_mappings>
+
+	<!--
+		The CIEs define CFA = SP + 0 at function entry, with the return address stored at CFA + 0
+		(BSR/JSR push the return address and SP then points at it).
+	-->
+	<call_frame_cfa value="0"/>
+
+	<!--
+		CC-RX emits DW_AT_frame_base as a location list of "SP + current stack depth", i.e. the
+		value of SP at function entry (= CFA). Ghidra cannot track SP through a location list, so
+		map SP-relative expressions directly to Ghidra stack offsets; the entry of that list is
+		"DW_OP_breg0 0", which yields frame base = stack offset 0 and makes DW_OP_fbreg locations
+		of parameters and locals resolve to the right stack slots.
+	-->
+	<stack_frame register="SP" offset="0"/>
+</dwarf>

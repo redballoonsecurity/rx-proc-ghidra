@@ -1,0 +1,2536 @@
+# sleigh include file for the RXv3 instruction set extensions (RX72N, RX72M, RX66N, RX671, ...)
+#
+# Included by rx62t.slaspec when RXV3 is defined (see rxv3.slaspec). Everything in
+# rx62t.sinc (RXv1/RXv2) is also valid RXv3; this file only adds what is new in RXv3:
+#   - XOR with three register operands
+#   - BFMOV / BFMOVZ (bit-field moves)
+#   - SAVE / RSTR (register bank save function)
+#   - the double-precision FPU: DR0-DR15, DPSW/DCMR/DECNT/DEPC and the D* instructions
+#
+# Reference: RX Family RXv3 Instruction Set Architecture User's Manual: Software
+# (R01US0316EJ0100, Rev.1.00), sections 3 and 4.
+
+################################################################
+# Registers
+################################################################
+
+# Double-precision floating-point registers. DRLn / DRHn are the low / high 32 bits of DRn.
+define register offset=0x200 size=8 [ DR0 DR1 DR2 DR3 DR4 DR5 DR6 DR7 DR8 DR9 DR10 DR11 DR12 DR13 DR14 DR15 ];
+define register offset=0x200 size=4 [
+	DRL0 DRH0 DRL1 DRH1 DRL2 DRH2 DRL3 DRH3 DRL4 DRH4 DRL5 DRH5 DRL6 DRH6 DRL7 DRH7
+	DRL8 DRH8 DRL9 DRH9 DRL10 DRH10 DRL11 DRH11 DRL12 DRH12 DRL13 DRH13 DRL14 DRH14 DRL15 DRH15
+];
+
+# Double-precision floating-point control registers (DCR0-DCR3)
+define register offset=0x280 size=4 [ DPSW DCMR DECNT DEPC ];
+
+@define DCMR_RES "DCMR[0,1]"
+
+################################################################
+# Tokens
+################################################################
+
+define token v3byte (8)
+	v3op     = (0,7)
+	v3hi     = (4,7)
+	v3lo     = (0,3)
+	v3ld     = (0,1)
+	v3top6   = (2,7)
+	cm       = (4,7)
+	gr1_hi   = (4,7)
+	gr1_lo   = (0,3)
+	gr2_hi   = (4,7)
+	gr2_lo   = (0,3)
+	dr1_hi   = (4,7)
+	dr1_lo   = (0,3)
+	dr2_hi   = (4,7)
+	dr2_lo   = (0,3)
+	drl_hi   = (4,7)
+	drh_hi   = (4,7)
+	dcr_hi   = (4,7)
+;
+
+define token v3imm16 (16)
+	bf_rot   = (0,4)    # (dlsb - slsb) & 0x1f
+	bf_dlsb  = (5,9)    # dlsb
+	bf_end   = (10,14)  # (dlsb + width) & 0x1f
+	bf_zero  = (15,15)
+;
+
+attach variables [ gr1_hi gr1_lo gr2_hi gr2_lo ] [ SP R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 ];
+attach variables [ dr1_hi dr1_lo dr2_hi dr2_lo ] [ DR0 DR1 DR2 DR3 DR4 DR5 DR6 DR7 DR8 DR9 DR10 DR11 DR12 DR13 DR14 DR15 ];
+attach variables [ drl_hi ] [ DRL0 DRL1 DRL2 DRL3 DRL4 DRL5 DRL6 DRL7 DRL8 DRL9 DRL10 DRL11 DRL12 DRL13 DRL14 DRL15 ];
+attach variables [ drh_hi ] [ DRH0 DRH1 DRH2 DRH3 DRH4 DRH5 DRH6 DRH7 DRH8 DRH9 DRH10 DRH11 DRH12 DRH13 DRH14 DRH15 ];
+attach variables [ dcr_hi ] [ DPSW DCMR DECNT DEPC _ _ _ _ _ _ _ _ _ _ _ _ ];
+
+define pcodeop save_register_bank;     # bank(src) = { R1-R15, USP, FPSW, ACC0, ACC1 }
+define pcodeop restore_register_bank;  # { R1-R15, USP, FPSW, ACC0, ACC1 } = bank(src)
+define pcodeop dround;                 # round to integer according to DPSW.DRM
+
+################################################################
+# XOR src, src2, dest (three register operands)
+#   FF 6 rd | rs rs2
+################################################################
+
+:XOR gr2_hi, gr2_lo, gr1_lo  is v3op = 0xFF; v3hi = 0x6 & gr1_lo; gr2_hi & gr2_lo {
+	gr1_lo = gr2_lo ^ gr2_hi;
+	setResultFlags(gr1_lo);
+}
+
+################################################################
+# BFMOV / BFMOVZ #slsb, #dlsb, #width, Rs, Rd
+#   FC 5E | rs rd | imm16   (BFMOV)
+#   FC 5A | rs rd | imm16   (BFMOVZ)
+#   imm16 = (((dlsb + width) & 1Fh) << 10) | (dlsb << 5) | ((dlsb - slsb) & 1Fh)
+################################################################
+
+:BFMOV "#"^slsb, "#"^dlsb, "#"^width, gr1_hi, gr1_lo   is v3op = 0xFC; v3op = 0x5E; gr1_hi & gr1_lo; bf_rot & bf_dlsb & bf_end
+	[ slsb = (bf_dlsb - bf_rot) & 0x1f; dlsb = bf_dlsb + 0; width = (bf_end - bf_dlsb) & 0x1f; ]
+{
+	local bfmask:4 = ((1 << width) - 1) << dlsb;
+	local tmp:4 = (gr1_hi >> slsb) << dlsb;
+	gr1_lo = (gr1_lo & ~bfmask) | (tmp & bfmask);
+}
+
+:BFMOVZ "#"^slsb, "#"^dlsb, "#"^width, gr1_hi, gr1_lo  is v3op = 0xFC; v3op = 0x5A; gr1_hi & gr1_lo; bf_rot & bf_dlsb & bf_end
+	[ slsb = (bf_dlsb - bf_rot) & 0x1f; dlsb = bf_dlsb + 0; width = (bf_end - bf_dlsb) & 0x1f; ]
+{
+	local bfmask:4 = ((1 << width) - 1) << dlsb;
+	local tmp:4 = (gr1_hi >> slsb) << dlsb;
+	gr1_lo = tmp & bfmask;
+}
+
+################################################################
+# Register bank save function
+#   FD 76 | E0 | imm8     SAVE #UIMM:8
+#   FD 76 | C rs | 00     SAVE Rs
+#   FD 76 | F0 | imm8     RSTR #UIMM:8
+#   FD 76 | D rs | 00     RSTR Rs
+################################################################
+
+:SAVE "#"^imm8  is v3op = 0xFD; v3op = 0x76; v3op = 0xE0; imm8 {
+	save_register_bank(imm8:1);
+}
+:SAVE gr1_lo    is v3op = 0xFD; v3op = 0x76; v3hi = 0xC & gr1_lo; v3op = 0x00 {
+	save_register_bank(gr1_lo);
+}
+:RSTR "#"^imm8  is v3op = 0xFD; v3op = 0x76; v3op = 0xF0; imm8 {
+	restore_register_bank(imm8:1);
+}
+:RSTR gr1_lo    is v3op = 0xFD; v3op = 0x76; v3hi = 0xD & gr1_lo; v3op = 0x00 {
+	restore_register_bank(gr1_lo);
+}
+
+################################################################
+# Double-precision data transfer
+################################################################
+
+## DMOV.L / DMOV.D Rs, DRHd       FD 77 | 8 rs | rd 0010 (.L) / rd 0011 (.D)
+:DMOV.L gr1_lo, drh_hi  is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; drh_hi & v3lo = 0x2 {
+	drh_hi = gr1_lo;
+}
+:DMOV.D gr1_lo, drh_hi  is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; drh_hi & dr2_hi & v3lo = 0x3 {
+	dr2_hi = zext(gr1_lo) << 32;
+}
+## DMOV.L Rs, DRLd                FD 77 | 8 rs | rd 0000
+:DMOV.L gr1_lo, drl_hi  is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; drl_hi & v3lo = 0x0 {
+	drl_hi = gr1_lo;
+}
+## DMOV.L DRHs, Rd                FD 75 | 8 rd | rs 0010
+:DMOV.L drh_hi, gr1_lo  is v3op = 0xFD; v3op = 0x75; v3hi = 0x8 & gr1_lo; drh_hi & v3lo = 0x2 {
+	gr1_lo = drh_hi;
+}
+## DMOV.L DRLs, Rd                FD 75 | 8 rd | rs 0000
+:DMOV.L drl_hi, gr1_lo  is v3op = 0xFD; v3op = 0x75; v3hi = 0x8 & gr1_lo; drl_hi & v3lo = 0x0 {
+	gr1_lo = drl_hi;
+}
+
+## DMOV.L / DMOV.D #IMM:32, DRHd / DRLd     F9 03 | rd 0011 (.D) / rd 0010 (.L, DRH) / rd 0000 (.L, DRL) | imm32
+:DMOV.D "#"^imm32, drh_hi  is v3op = 0xF9; v3op = 0x03; drh_hi & dr2_hi & v3lo = 0x3; imm32 {
+	local tmp:8 = zext(imm32:4);
+	dr2_hi = tmp << 32;
+}
+:DMOV.L "#"^imm32, drh_hi  is v3op = 0xF9; v3op = 0x03; drh_hi & v3lo = 0x2; imm32 {
+	drh_hi = imm32;
+}
+:DMOV.L "#"^imm32, drl_hi  is v3op = 0xF9; v3op = 0x03; drl_hi & v3lo = 0x0; imm32 {
+	drl_hi = imm32;
+}
+
+## DMOV.D DRs, DRd                76 90 | rs 1100 | rd 0000
+:DMOV.D dr1_hi, dr2_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xC; dr2_hi & v3lo = 0x0 {
+	dr2_hi = dr1_hi;
+}
+
+## DMOV.D DRs, [Rd] / dsp[Rd]      FC 78+ld | rd 1000 | [dsp] | rs 0000
+## DMOV.D [Rs] / dsp[Rs], DRd      FC C8+ld | rs 1000 | [dsp] | rd 0000
+## (the displacement is scaled by 4 for .D, see the note in the DMOV description of the RXv3 manual)
+:DMOV.D dr1_hi, [gr1_hi]       is v3op = 0xFC; v3op = 0x78; gr1_hi & v3lo = 0x8; dr1_hi & v3lo = 0x0 {
+	*:8 gr1_hi = dr1_hi;
+}
+:DMOV.D dr1_hi, dsp^[gr1_hi]   is v3op = 0xFC; v3op = 0x79; gr1_hi & v3lo = 0x8; imm8; dr1_hi & v3lo = 0x0  [ dsp = imm8 * 4; ] {
+	local a:4 = gr1_hi + dsp;
+	*:8 a = dr1_hi;
+}
+:DMOV.D dr1_hi, dsp^[gr1_hi]   is v3op = 0xFC; v3op = 0x7A; gr1_hi & v3lo = 0x8; imm16; dr1_hi & v3lo = 0x0 [ dsp = imm16 * 4; ] {
+	local a:4 = gr1_hi + dsp;
+	*:8 a = dr1_hi;
+}
+:DMOV.D [gr1_hi], dr1_hi       is v3op = 0xFC; v3op = 0xC8; gr1_hi & v3lo = 0x8; dr1_hi & v3lo = 0x0 {
+	dr1_hi = *:8 gr1_hi;
+}
+:DMOV.D dsp^[gr1_hi], dr1_hi   is v3op = 0xFC; v3op = 0xC9; gr1_hi & v3lo = 0x8; imm8; dr1_hi & v3lo = 0x0  [ dsp = imm8 * 4; ] {
+	local a:4 = gr1_hi + dsp;
+	dr1_hi = *:8 a;
+}
+:DMOV.D dsp^[gr1_hi], dr1_hi   is v3op = 0xFC; v3op = 0xCA; gr1_hi & v3lo = 0x8; imm16; dr1_hi & v3lo = 0x0 [ dsp = imm16 * 4; ] {
+	local a:4 = gr1_hi + dsp;
+	dr1_hi = *:8 a;
+}
+
+## DPUSHM.D DRs-DRs2 / DPOPM.D DRd-DRd2     75 B0 / 75 B8 | r nm   (registers r .. r+nm)
+## DPUSHM.L DCRs-DCRs2 / DPOPM.L ...         75 A0 / 75 A8 | r nm
+## One constructor per register range (generated), so the p-code is straight-line.
+## DPUSHM saves from the highest register down; DPOPM restores from the lowest up.
+:DPUSHM.D "DR0-DR0"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR1"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR2"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR3"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR4"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR5"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 10 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 11 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 12 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 13 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 14 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR0-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 0 & v3lo = 15 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+	SP = SP - 8; *:8 SP = DR0;
+}
+:DPUSHM.D "DR1-DR1"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR2"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR3"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR4"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR5"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 10 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 11 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 12 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 13 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR1-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 1 & v3lo = 14 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+	SP = SP - 8; *:8 SP = DR1;
+}
+:DPUSHM.D "DR2-DR2"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR3"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR4"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR5"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 10 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 11 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 12 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR2-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 2 & v3lo = 13 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+	SP = SP - 8; *:8 SP = DR2;
+}
+:DPUSHM.D "DR3-DR3"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR4"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR5"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 10 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 11 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR3-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 3 & v3lo = 12 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+	SP = SP - 8; *:8 SP = DR3;
+}
+:DPUSHM.D "DR4-DR4"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR5"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 10 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR4-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 4 & v3lo = 11 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+	SP = SP - 8; *:8 SP = DR4;
+}
+:DPUSHM.D "DR5-DR5"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR5-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 5 & v3lo = 10 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+	SP = SP - 8; *:8 SP = DR5;
+}
+:DPUSHM.D "DR6-DR6"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR6-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 6 & v3lo = 9 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+	SP = SP - 8; *:8 SP = DR6;
+}
+:DPUSHM.D "DR7-DR7"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR7-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 7 & v3lo = 8 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+	SP = SP - 8; *:8 SP = DR7;
+}
+:DPUSHM.D "DR8-DR8"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR8-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 8 & v3lo = 7 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+	SP = SP - 8; *:8 SP = DR8;
+}
+:DPUSHM.D "DR9-DR9"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR9-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR9-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR9-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR9-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR9-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR9-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 9 & v3lo = 6 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+	SP = SP - 8; *:8 SP = DR9;
+}
+:DPUSHM.D "DR10-DR10"  is v3op = 0x75; v3op = 0xB0; v3hi = 10 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR10;
+}
+:DPUSHM.D "DR10-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 10 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+}
+:DPUSHM.D "DR10-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 10 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+}
+:DPUSHM.D "DR10-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 10 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+}
+:DPUSHM.D "DR10-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 10 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+}
+:DPUSHM.D "DR10-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 10 & v3lo = 5 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+	SP = SP - 8; *:8 SP = DR10;
+}
+:DPUSHM.D "DR11-DR11"  is v3op = 0x75; v3op = 0xB0; v3hi = 11 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR11;
+}
+:DPUSHM.D "DR11-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 11 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+}
+:DPUSHM.D "DR11-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 11 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+}
+:DPUSHM.D "DR11-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 11 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+}
+:DPUSHM.D "DR11-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 11 & v3lo = 4 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+	SP = SP - 8; *:8 SP = DR11;
+}
+:DPUSHM.D "DR12-DR12"  is v3op = 0x75; v3op = 0xB0; v3hi = 12 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR12;
+}
+:DPUSHM.D "DR12-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 12 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+}
+:DPUSHM.D "DR12-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 12 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+}
+:DPUSHM.D "DR12-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 12 & v3lo = 3 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+	SP = SP - 8; *:8 SP = DR12;
+}
+:DPUSHM.D "DR13-DR13"  is v3op = 0x75; v3op = 0xB0; v3hi = 13 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR13;
+}
+:DPUSHM.D "DR13-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 13 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+}
+:DPUSHM.D "DR13-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 13 & v3lo = 2 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+	SP = SP - 8; *:8 SP = DR13;
+}
+:DPUSHM.D "DR14-DR14"  is v3op = 0x75; v3op = 0xB0; v3hi = 14 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR14;
+}
+:DPUSHM.D "DR14-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 14 & v3lo = 1 {
+	SP = SP - 8; *:8 SP = DR15;
+	SP = SP - 8; *:8 SP = DR14;
+}
+:DPUSHM.D "DR15-DR15"  is v3op = 0x75; v3op = 0xB0; v3hi = 15 & v3lo = 0 {
+	SP = SP - 8; *:8 SP = DR15;
+}
+
+:DPOPM.D "DR0-DR0"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 0 {
+	DR0 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR1"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 1 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR2"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 2 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR3"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 3 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR4"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 4 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR5"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 5 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 6 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 7 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 8 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 9 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 10 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 11 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 12 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 13 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 14 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR0-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 0 & v3lo = 15 {
+	DR0 = *:8 SP; SP = SP + 8;
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR1"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 0 {
+	DR1 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR2"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 1 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR3"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 2 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR4"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 3 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR5"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 4 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 5 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 6 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 7 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 8 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 9 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 10 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 11 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 12 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 13 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR1-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 1 & v3lo = 14 {
+	DR1 = *:8 SP; SP = SP + 8;
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR2"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 0 {
+	DR2 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR3"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 1 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR4"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 2 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR5"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 3 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 4 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 5 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 6 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 7 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 8 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 9 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 10 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 11 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 12 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR2-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 2 & v3lo = 13 {
+	DR2 = *:8 SP; SP = SP + 8;
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR3"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 0 {
+	DR3 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR4"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 1 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR5"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 2 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 3 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 4 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 5 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 6 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 7 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 8 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 9 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 10 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 11 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR3-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 3 & v3lo = 12 {
+	DR3 = *:8 SP; SP = SP + 8;
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR4"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 0 {
+	DR4 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR5"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 1 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 2 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 3 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 4 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 5 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 6 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 7 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 8 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 9 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 10 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR4-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 4 & v3lo = 11 {
+	DR4 = *:8 SP; SP = SP + 8;
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR5"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 0 {
+	DR5 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 1 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 2 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 3 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 4 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 5 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 6 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 7 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 8 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 9 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR5-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 5 & v3lo = 10 {
+	DR5 = *:8 SP; SP = SP + 8;
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR6"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 0 {
+	DR6 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 1 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 2 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 3 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 4 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 5 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 6 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 7 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 8 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR6-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 6 & v3lo = 9 {
+	DR6 = *:8 SP; SP = SP + 8;
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR7"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 0 {
+	DR7 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 1 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 2 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 3 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 4 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 5 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 6 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 7 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR7-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 7 & v3lo = 8 {
+	DR7 = *:8 SP; SP = SP + 8;
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR8"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 0 {
+	DR8 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 1 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 2 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 3 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 4 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 5 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 6 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR8-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 8 & v3lo = 7 {
+	DR8 = *:8 SP; SP = SP + 8;
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR9"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 0 {
+	DR9 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 1 {
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 2 {
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 3 {
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 4 {
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 5 {
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR9-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 9 & v3lo = 6 {
+	DR9 = *:8 SP; SP = SP + 8;
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR10-DR10"  is v3op = 0x75; v3op = 0xB8; v3hi = 10 & v3lo = 0 {
+	DR10 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR10-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 10 & v3lo = 1 {
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR10-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 10 & v3lo = 2 {
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR10-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 10 & v3lo = 3 {
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR10-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 10 & v3lo = 4 {
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR10-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 10 & v3lo = 5 {
+	DR10 = *:8 SP; SP = SP + 8;
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR11-DR11"  is v3op = 0x75; v3op = 0xB8; v3hi = 11 & v3lo = 0 {
+	DR11 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR11-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 11 & v3lo = 1 {
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR11-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 11 & v3lo = 2 {
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR11-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 11 & v3lo = 3 {
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR11-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 11 & v3lo = 4 {
+	DR11 = *:8 SP; SP = SP + 8;
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR12-DR12"  is v3op = 0x75; v3op = 0xB8; v3hi = 12 & v3lo = 0 {
+	DR12 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR12-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 12 & v3lo = 1 {
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR12-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 12 & v3lo = 2 {
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR12-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 12 & v3lo = 3 {
+	DR12 = *:8 SP; SP = SP + 8;
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR13-DR13"  is v3op = 0x75; v3op = 0xB8; v3hi = 13 & v3lo = 0 {
+	DR13 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR13-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 13 & v3lo = 1 {
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR13-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 13 & v3lo = 2 {
+	DR13 = *:8 SP; SP = SP + 8;
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR14-DR14"  is v3op = 0x75; v3op = 0xB8; v3hi = 14 & v3lo = 0 {
+	DR14 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR14-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 14 & v3lo = 1 {
+	DR14 = *:8 SP; SP = SP + 8;
+	DR15 = *:8 SP; SP = SP + 8;
+}
+:DPOPM.D "DR15-DR15"  is v3op = 0x75; v3op = 0xB8; v3hi = 15 & v3lo = 0 {
+	DR15 = *:8 SP; SP = SP + 8;
+}
+
+:DPUSHM.L "DPSW-DPSW"  is v3op = 0x75; v3op = 0xA0; v3hi = 0 & v3lo = 0 {
+	SP = SP - 4; *:4 SP = DPSW;
+}
+:DPUSHM.L "DPSW-DCMR"  is v3op = 0x75; v3op = 0xA0; v3hi = 0 & v3lo = 1 {
+	SP = SP - 4; *:4 SP = DCMR;
+	SP = SP - 4; *:4 SP = DPSW;
+}
+:DPUSHM.L "DPSW-DECNT"  is v3op = 0x75; v3op = 0xA0; v3hi = 0 & v3lo = 2 {
+	SP = SP - 4; *:4 SP = DECNT;
+	SP = SP - 4; *:4 SP = DCMR;
+	SP = SP - 4; *:4 SP = DPSW;
+}
+:DPUSHM.L "DPSW-DEPC"  is v3op = 0x75; v3op = 0xA0; v3hi = 0 & v3lo = 3 {
+	SP = SP - 4; *:4 SP = DEPC;
+	SP = SP - 4; *:4 SP = DECNT;
+	SP = SP - 4; *:4 SP = DCMR;
+	SP = SP - 4; *:4 SP = DPSW;
+}
+:DPUSHM.L "DCMR-DCMR"  is v3op = 0x75; v3op = 0xA0; v3hi = 1 & v3lo = 0 {
+	SP = SP - 4; *:4 SP = DCMR;
+}
+:DPUSHM.L "DCMR-DECNT"  is v3op = 0x75; v3op = 0xA0; v3hi = 1 & v3lo = 1 {
+	SP = SP - 4; *:4 SP = DECNT;
+	SP = SP - 4; *:4 SP = DCMR;
+}
+:DPUSHM.L "DCMR-DEPC"  is v3op = 0x75; v3op = 0xA0; v3hi = 1 & v3lo = 2 {
+	SP = SP - 4; *:4 SP = DEPC;
+	SP = SP - 4; *:4 SP = DECNT;
+	SP = SP - 4; *:4 SP = DCMR;
+}
+:DPUSHM.L "DECNT-DECNT"  is v3op = 0x75; v3op = 0xA0; v3hi = 2 & v3lo = 0 {
+	SP = SP - 4; *:4 SP = DECNT;
+}
+:DPUSHM.L "DECNT-DEPC"  is v3op = 0x75; v3op = 0xA0; v3hi = 2 & v3lo = 1 {
+	SP = SP - 4; *:4 SP = DEPC;
+	SP = SP - 4; *:4 SP = DECNT;
+}
+:DPUSHM.L "DEPC-DEPC"  is v3op = 0x75; v3op = 0xA0; v3hi = 3 & v3lo = 0 {
+	SP = SP - 4; *:4 SP = DEPC;
+}
+
+:DPOPM.L "DPSW-DPSW"  is v3op = 0x75; v3op = 0xA8; v3hi = 0 & v3lo = 0 {
+	DPSW = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DPSW-DCMR"  is v3op = 0x75; v3op = 0xA8; v3hi = 0 & v3lo = 1 {
+	DPSW = *:4 SP; SP = SP + 4;
+	DCMR = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DPSW-DECNT"  is v3op = 0x75; v3op = 0xA8; v3hi = 0 & v3lo = 2 {
+	DPSW = *:4 SP; SP = SP + 4;
+	DCMR = *:4 SP; SP = SP + 4;
+	DECNT = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DPSW-DEPC"  is v3op = 0x75; v3op = 0xA8; v3hi = 0 & v3lo = 3 {
+	DPSW = *:4 SP; SP = SP + 4;
+	DCMR = *:4 SP; SP = SP + 4;
+	DECNT = *:4 SP; SP = SP + 4;
+	DEPC = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DCMR-DCMR"  is v3op = 0x75; v3op = 0xA8; v3hi = 1 & v3lo = 0 {
+	DCMR = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DCMR-DECNT"  is v3op = 0x75; v3op = 0xA8; v3hi = 1 & v3lo = 1 {
+	DCMR = *:4 SP; SP = SP + 4;
+	DECNT = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DCMR-DEPC"  is v3op = 0x75; v3op = 0xA8; v3hi = 1 & v3lo = 2 {
+	DCMR = *:4 SP; SP = SP + 4;
+	DECNT = *:4 SP; SP = SP + 4;
+	DEPC = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DECNT-DECNT"  is v3op = 0x75; v3op = 0xA8; v3hi = 2 & v3lo = 0 {
+	DECNT = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DECNT-DEPC"  is v3op = 0x75; v3op = 0xA8; v3hi = 2 & v3lo = 1 {
+	DECNT = *:4 SP; SP = SP + 4;
+	DEPC = *:4 SP; SP = SP + 4;
+}
+:DPOPM.L "DEPC-DEPC"  is v3op = 0x75; v3op = 0xA8; v3hi = 3 & v3lo = 0 {
+	DEPC = *:4 SP; SP = SP + 4;
+}
+
+## MVFDC DCRs, Rd                 FD 75 | 8 rd | cr 0100
+:MVFDC dcr_hi, gr1_lo  is v3op = 0xFD; v3op = 0x75; v3hi = 0x8 & gr1_lo; dcr_hi & v3hi < 4 & v3lo = 0x4 {
+	gr1_lo = dcr_hi;
+}
+## MVTDC Rs, DCRd                 FD 77 | 8 rs | cr 0100
+:MVTDC gr1_lo, dcr_hi  is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; dcr_hi & v3hi < 4 & v3lo = 0x4 {
+	dcr_hi = gr1_lo;
+}
+## MVFDR                          75 90 1B    (PSW.Z = DCMR.RES)
+:MVFDR  is v3op = 0x75; v3op = 0x90; v3op = 0x1B {
+	$(Z_flag) = $(DCMR_RES);
+}
+
+################################################################
+# Double-precision arithmetic
+#   two operands:   76 90 | rs  op1 | rd  op2
+#   three operands: 76 90 | rs2 op  | rd  rs      (syntax: Dxxx src, src2, dest)
+################################################################
+
+:DADD dr2_lo, dr1_hi, dr2_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x0; dr2_hi & dr2_lo {
+	dr2_hi = dr1_hi f+ dr2_lo;
+}
+:DSUB dr2_lo, dr1_hi, dr2_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x1; dr2_hi & dr2_lo {
+	dr2_hi = dr1_hi f- dr2_lo;
+}
+:DMUL dr2_lo, dr1_hi, dr2_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x2; dr2_hi & dr2_lo {
+	dr2_hi = dr1_hi f* dr2_lo;
+}
+:DDIV dr2_lo, dr1_hi, dr2_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x5; dr2_hi & dr2_lo {
+	dr2_hi = dr1_hi f/ dr2_lo;
+}
+
+## DCMPcm src, src2: DCMR.RES = (src2 cm src)
+:DCMPUN dr2_lo, dr1_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x8; cm = 0x1 & dr2_lo {
+	$(DCMR_RES) = nan(dr1_hi) || nan(dr2_lo);
+}
+:DCMPEQ dr2_lo, dr1_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x8; cm = 0x2 & dr2_lo {
+	$(DCMR_RES) = dr1_hi f== dr2_lo;
+}
+:DCMPLT dr2_lo, dr1_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x8; cm = 0x4 & dr2_lo {
+	$(DCMR_RES) = dr1_hi f< dr2_lo;
+}
+:DCMPLE dr2_lo, dr1_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0x8; cm = 0x6 & dr2_lo {
+	$(DCMR_RES) = dr1_hi f<= dr2_lo;
+}
+
+:DABS dr1_hi, dr2_hi    is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xC; dr2_hi & v3lo = 0x1 {
+	dr2_hi = abs(dr1_hi);
+}
+:DNEG dr1_hi, dr2_hi    is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xC; dr2_hi & v3lo = 0x2 {
+	dr2_hi = f- dr1_hi;
+}
+:DSQRT dr1_hi, dr2_hi   is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xD; dr2_hi & v3lo = 0x0 {
+	dr2_hi = sqrt(dr1_hi);
+}
+
+## Conversions from double: the 32-bit result goes to the lower half of DRd, the upper half is undefined
+:DTOI dr1_hi, dr2_hi    is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xD; dr2_hi & drl_hi & v3lo = 0x8 {
+	drl_hi = trunc(dr1_hi);
+}
+:DTOU dr1_hi, dr2_hi    is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xD; dr2_hi & drl_hi & v3lo = 0x9 {
+	local tmp:8 = trunc(dr1_hi);
+	drl_hi = tmp:4;
+}
+:DTOF dr1_hi, dr2_hi    is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xD; dr2_hi & drl_hi & v3lo = 0xC {
+	drl_hi = float2float(dr1_hi);
+}
+:DROUND dr1_hi, dr2_hi  is v3op = 0x76; v3op = 0x90; dr1_hi & v3lo = 0xD; dr2_hi & drl_hi & v3lo = 0xD {
+	drl_hi = dround(dr1_hi);
+}
+
+## Conversions to double              FD 77 | 8 rs | rd op
+:FTOD gr1_lo, dr2_hi    is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; dr2_hi & v3lo = 0xA {
+	dr2_hi = float2float(gr1_lo);
+}
+:ITOD gr1_lo, dr2_hi    is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; dr2_hi & v3lo = 0x9 {
+	dr2_hi = int2float(gr1_lo);
+}
+:UTOD gr1_lo, dr2_hi    is v3op = 0xFD; v3op = 0x77; v3hi = 0x8 & gr1_lo; dr2_hi & v3lo = 0xD {
+	local tmp:8 = zext(gr1_lo);
+	dr2_hi = int2float(tmp);
+}
