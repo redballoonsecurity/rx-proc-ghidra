@@ -1,12 +1,7 @@
 <opinions>
-<!-- Example of importer opinions - commented-out to prevent use by Ghidra -->
-<!-- The primary and secondary constraint values must be specifide as a decimal string -->
-<!--
+    <!-- EM_RX = 173. RXv3 is a superset of RXv1/RXv2, so it is the default for RX ELF files;
+         pick RX:LE:32:RXv2 manually to restrict decoding to the RXv2 instruction set. -->
     <constraint loader="Executable and Linking Format (ELF)" compilerSpecID="default">
-    		<constraint primary="40"   secondary="123"  processor="Skel"  size="16" variant="default" />
+        <constraint primary="173" processor="RX" endian="little" size="32" variant="RXv3" />
     </constraint>
-    <constraint loader="MS Common Object File Format (COFF)" compilerSpecID="default">
-        <constraint primary="61"                    processor="Skel"  size="16" variant="default" />
-    </constraint>
--->
 </opinions>

@@ -1,4 +1,7 @@
-# sleigh specification file for RX62T Processor
+# sleigh specification file for Renesas RX processors (RXv1/RXv2 core).
+#
+# This file is also the base of the RXv3 language: rxv3.slaspec defines RXV3
+# and includes this file, which then pulls in the RXv3 extensions (rxv3.sinc).
 
 define endian=little;
 define alignment=1;
@@ -31,8 +34,11 @@ define register offset=0x100 size=4 [ contextreg LIREG ];
 ## R0 = SP. Can be interrupt SP (ISP) or user SP (USP) based on stack pointer select bit in PSW.
 #define register offset=0x00 size=4 SP;
 
-define register offset=0x64 size=8 ACC;
-#define register offset=0x64 size=8 [ A0 A1 ]; # No A1 in RX62T, but other RXv2 may have it
+# DSP accumulators. Each is 72 bits wide: bits 63..0 are modelled by A0/A1 and the
+# 8 guard bits (71..64, RXv2 and later) by A0G/A1G.
+define register offset=0x70 size=8 [ A0 A1 ];
+define register offset=0x70 size=4 [ A0LO A0HI A1LO A1HI ];
+define register offset=0x80 size=1 [ A0G A1G ];
 
 # Bit range registers
 ## Processor Status Word (PSW / BPSW)
@@ -45,10 +51,15 @@ define register offset=0x64 size=8 ACC;
 #                U_flag=PSW[17,1]
 #                PM=PSW[20,1]
 #                IPL=PSW[24,4];
-@define C_flag "PSW[0,1]"
-@define Z_flag "PSW[1,1]"
-@define S_flag "PSW[2,1]"
-@define O_flag "PSW[3,1]"
+# The condition flags C/Z/S/O are kept in separate 1-byte registers rather than as bits of
+# PSW, so the decompiler can follow comparisons into conditional branches (needed e.g. for
+# switch/jump-table recovery). PSW bits 3..0 are synchronized from/to these registers by the
+# packPSW()/unpackPSW() macros wherever PSW is read or written as a whole.
+define register offset=0x90 size=1 [ CF ZF SF OF ];
+@define C_flag "CF"
+@define Z_flag "ZF"
+@define S_flag "SF"
+@define O_flag "OF"
 @define I_flag "PSW[16,1]"
 @define U_flag "PSW[17,1]"
 @define PM "PSW[20,1]"
@@ -85,5 +96,10 @@ define register offset=0x64 size=8 ACC;
 # 0b11: round towards -infinity
 
 
-# Include contents of .sinc file
+# Instructions common to RXv1/RXv2 (and RXv3)
 @include "rx62t.sinc"
+
+@ifdef RXV3
+# RXv3 additions: double-precision FPU, register bank save/restore, bit-field moves, ...
+@include "rxv3.sinc"
+@endif

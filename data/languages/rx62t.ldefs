@@ -3,15 +3,30 @@
 <!-- See Relax specification: Ghidra/Framework/SoftwareModeling/data/languages/language_definitions.rxg -->
 
 <language_definitions>
-   <language processor="RX62T"
+  <language processor="RX"
             endian="little"
             size="32"
-            variant="default"
+            variant="RXv2"
             version="1.0"
             slafile="rx62t.sla"
             processorspec="rx62t.pspec"
-            id="rx62t:LE:32:default">
-    <description>RX62T/RXv2 Language Module</description>
+            id="RX:LE:32:RXv2">
+    <description>Renesas RX, RXv1/RXv2 instruction set (RX62T, RX65N, RX66T, ...)</description>
     <compiler name="default" spec="rx62t.cspec" id="default"/>
+    <external_name tool="gnu" name="rx"/>
+    <external_name tool="DWARF.register.mapping.file" name="rx.dwarf"/>
+  </language>
+  <language processor="RX"
+            endian="little"
+            size="32"
+            variant="RXv3"
+            version="1.0"
+            slafile="rxv3.sla"
+            processorspec="rx62t.pspec"
+            id="RX:LE:32:RXv3">
+    <description>Renesas RX, RXv3 instruction set with double-precision FPU (RX72N, RX72M, RX66N, RX671, ...)</description>
+    <compiler name="default" spec="rx62t.cspec" id="default"/>
+    <external_name tool="gnu" name="rx"/>
+    <external_name tool="DWARF.register.mapping.file" name="rxv3.dwarf"/>
   </language>
 </language_definitions>
